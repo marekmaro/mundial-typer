@@ -24,7 +24,13 @@ export default function PredictionCard({ match, prediction, playerId }: { match:
     formData.append('home', home.toString());
     formData.append('away', away.toString());
     const res = await submitPrediction(formData);
-    setMsg({ text: res.success ? 'Zapisano!' : res.error, type: res.success ? 'success' : 'error' });
+    
+    // FIX TYPESCRIPTA: dodane || 'Wystąpił błąd' na wypadek gdyby res.error było undefined
+    setMsg({ 
+      text: res.success ? 'Zapisano!' : (res.error || 'Wystąpił błąd'), 
+      type: res.success ? 'success' : 'error' 
+    });
+    
     setTimeout(() => setMsg({ text: '', type: '' }), 3000);
     setLoading(false);
   };
@@ -38,7 +44,6 @@ export default function PredictionCard({ match, prediction, playerId }: { match:
       <div className="flex justify-between items-center mb-5">
         <div className="flex-1 text-right flex flex-col items-end gap-1.5 truncate">
           <TeamFlag teamName={match.homeTeam} className="w-8 h-5" />
-          {/* Dodanie klasy whitespace-pre-line aby nazwy mogły łamać się w linii */}
           <span className="font-bold text-xs sm:text-sm w-full leading-tight whitespace-pre-line" title={t(match.homeTeam)}>{shortT(match.homeTeam)}</span>
         </div>
         <div className="flex gap-1.5 px-3 shrink-0">
