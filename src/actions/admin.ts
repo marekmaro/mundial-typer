@@ -1,0 +1,139 @@
+'use server';
+import connectToDatabase from '@/lib/db';
+import Player from '@/models/Player';
+import Match from '@/models/Match';
+import Prediction from '@/models/Prediction';
+import { calculatePoints } from '@/lib/scoring';
+import crypto from 'crypto';
+import { revalidatePath } from 'next/cache';
+import { syncMatchesFromAPI } from '@/lib/syncMundial';
+
+export async function createPlayerLink(nick: string, company: string, adminSecret: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Nieprawidłowe hasło.' };
+  await connectToDatabase();
+  try {
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    await Player.create({ nick: nick.trim(), company: company.trim() || 'Ogólna', tokenHash });
+    revalidatePath('/admin'); revalidatePath('/leaderboard');
+    return { success: true, token: rawToken };
+  } catch (error) { return { error: 'Błąd tworzenia gracza.' }; }
+}
+
+export async function recalculateAllPoints(adminSecret: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła.' };
+  await connectToDatabase();
+  const matches = await Match.find({ status: 'FINISHED' });
+  for (const match of matches) {
+    const homeScore = match.scoreOverride?.home ?? match.score.home;
+    const awayScore = match.scoreOverride?.away ?? match.score.away;
+    if (homeScore === null || awayScore === null) continue;
+    const predictions = await Prediction.find({ matchId: match._id });
+    for (const pred of predictions) {
+      const pts = calculatePoints(pred.home, pred.away, homeScore, awayScore);
+      if (pred.points !== pts) { pred.points = pts; await pred.save(); }
+    }
+  }
+  revalidatePath('/admin'); revalidatePath('/leaderboard'); revalidatePath('/p/[token]', 'page');
+  return { success: true, message: `Przeliczono punkty dla wszystkich graczy.` };
+}
+
+export async function syncMatchesAction(adminSecret: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła.' };
+  const result = await syncMatchesFromAPI();
+  revalidatePath('/'); revalidatePath('/schedule'); revalidatePath('/admin'); revalidatePath('/bracket');
+  return { success: true, message: `Zsynchronizowano! Dodano: ${result.added}, Info: ${result.updated}` };
+}
+
+export async function getPlayersList(adminSecret: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
+  await connectToDatabase();
+  const players = await Player.find().sort({ createdAt: -1 }).lean();
+  return { success: true, players: JSON.parse(JSON.stringify(players)) };
+}
+
+export async function togglePlayerBlock(adminSecret: string, playerId: string, currentStatus: boolean) {
+  await connectToDatabase();
+  await Player.findByIdAndUpdate(playerId, { blocked: !currentStatus });
+  revalidatePath('/admin'); revalidatePath('/leaderboard');
+  return { success: true };
+}
+
+export async function deletePlayerAction(adminSecret: string, playerId: string) {
+  await connectToDatabase();
+  await Prediction.deleteMany({ playerId });
+  await Player.findByIdAndDelete(playerId);
+  revalidatePath('/admin'); revalidatePath('/leaderboard');
+  return { success: true };
+}
+
+export async function getPlayerPredictionsForAdmin(adminSecret: string, playerId: string) {
+  await connectToDatabase();
+  const matches = await Match.find().sort({ kickoffUtc: 1 }).lean();
+  const predictions = await Prediction.find({ playerId }).lean();
+  return { success: true, matches: JSON.parse(JSON.stringify(matches)), predictions: JSON.parse(JSON.stringify(predictions)) };
+}
+
+export async function adminOverridePrediction(adminSecret: string, playerId: string, matchId: string, home: number, away: number) {
+  await connectToDatabase();
+  await Prediction.findOneAndUpdate({ playerId, matchId }, { home, away }, { upsert: true });
+  return { success: true };
+}
+
+export async function exportLeaderboardCSV(adminSecret: string) {
+  await connectToDatabase();
+  const players = await Player.find({ blocked: false }).lean();
+  const predictions = await Prediction.find({ points: { $ne: null } }).lean();
+  const stats = players.map(player => {
+    const pPreds = predictions.filter(p => p.playerId.toString() === player._id.toString());
+    const totalPoints = pPreds.reduce((sum, p) => sum + (p.points || 0), 0);
+    const exactHits = pPreds.filter(p => p.points === 3).length;
+    return { nick: player.nick, company: player.company, totalPoints, exactHits };
+  });
+  stats.sort((a, b) => b.totalPoints - a.totalPoints || b.exactHits - a.exactHits || a.nick.localeCompare(b.nick));
+  let csv = 'Pozycja,Nick,Firma,Punkty,DokladneTrafienia\n';
+  stats.forEach((s, i) => { csv += `${i + 1},${s.nick},${s.company || 'Ogólna'},${s.totalPoints},${s.exactHits}\n`; });
+  return { success: true, csv };
+}
+
+// --- NOWE FUNKCJE DLA SUPER-EDYTA MECZÓW ---
+
+export async function getAllMatchesAdmin(adminSecret: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Odmowa dostępu' };
+  await connectToDatabase();
+  const matches = await Match.find().sort({ kickoffUtc: 1 }).lean();
+  return { success: true, matches: JSON.parse(JSON.stringify(matches)) };
+}
+
+export async function superEditMatchAction(adminSecret: string, matchId: string, payload: any) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Odmowa dostępu' };
+  await connectToDatabase();
+  
+  try {
+    const updateData: any = {
+      homeTeam: payload.homeTeam,
+      awayTeam: payload.awayTeam,
+      status: payload.status,
+      kickoffUtc: new Date(payload.kickoffUtc)
+    };
+
+    // Obsługa ręcznego wyniku (override)
+    if (payload.homeScore !== '' && payload.awayScore !== '') {
+      updateData.scoreOverride = {
+        home: parseInt(payload.homeScore),
+        away: parseInt(payload.awayScore),
+        updatedAt: new Date()
+      };
+      // Jeśli podano wynik z palca, możemy bezpiecznie wymusić status na FINISHED
+      if (payload.status !== 'SCHEDULED') updateData.status = 'FINISHED';
+    } else {
+      updateData.scoreOverride = null; // Czyszczenie override'a
+    }
+
+    await Match.findByIdAndUpdate(matchId, updateData);
+    revalidatePath('/admin'); revalidatePath('/schedule'); revalidatePath('/bracket'); revalidatePath('/p/[token]', 'page');
+    return { success: true, message: `Zapisano zmiany w meczu!` };
+  } catch (error) { 
+    return { error: 'Błąd podczas aktualizacji meczu.' }; 
+  }
+}
