@@ -9,8 +9,7 @@ import crypto from 'crypto';
 import { revalidatePath } from 'next/cache';
 import { syncMatchesFromAPI } from '@/lib/syncMundial';
 
-// Inicjalizacja ustawień jeśli nie istnieją
-async function getSettings() {
+export async function getSettings() {
   await connectToDatabase();
   let s = await Settings.findOne();
   if (!s) s = await Settings.create({ maintenanceMode: false, globalMessage: "", tournamentWinner: "" });
@@ -18,17 +17,31 @@ async function getSettings() {
 }
 
 export async function createPlayerLink(nick: string, company: string, adminSecret: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Błąd hasła' };
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Nieprawidłowe hasło.' };
   await connectToDatabase();
-  const rawToken = crypto.randomBytes(16).toString('hex');
-  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-  await Player.create({ nick: nick.trim(), company: company.trim() || 'Ogólna', tokenHash, rawToken });
-  revalidatePath('/admin');
-  return { success: true, token: rawToken };
+  try {
+    const rawToken = crypto.randomBytes(16).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    await Player.create({ nick: nick.trim(), company: company.trim() || 'Ogólna', tokenHash, rawToken });
+    revalidatePath('/admin'); revalidatePath('/leaderboard');
+    return { success: true, token: rawToken };
+  } catch (error) { return { error: 'Błąd tworzenia gracza.' }; }
+}
+
+export async function regeneratePlayerLink(adminSecret: string, playerId: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Nieprawidłowe hasło.' };
+  await connectToDatabase();
+  try {
+    const rawToken = crypto.randomBytes(16).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    await Player.findByIdAndUpdate(playerId, { tokenHash, rawToken });
+    revalidatePath('/admin');
+    return { success: true, token: rawToken };
+  } catch (error) { return { error: 'Błąd podczas odnawiania linku.' }; }
 }
 
 export async function updateGlobalSettings(adminSecret: string, data: any) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Błąd hasła' };
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
   await connectToDatabase();
   await Settings.findOneAndUpdate({}, data, { upsert: true });
   revalidatePath('/admin'); revalidatePath('/p/[token]', 'page');
@@ -36,34 +49,28 @@ export async function updateGlobalSettings(adminSecret: string, data: any) {
 }
 
 export async function recalculateAllPoints(adminSecret: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Błąd hasła' };
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła.' };
   await connectToDatabase();
-  const settings = await getSettings();
   const matches = await Match.find({ status: 'FINISHED' });
-  
-  const players = await Player.find();
-  for (const player of players) {
-    let total = 0;
-    // 1. Punkty z meczów
-    const preds = await Prediction.find({ playerId: player._id });
-    for (const p of preds) {
-      const m = matches.find(match => match._id.toString() === p.matchId.toString());
-      if (m) {
-        const hR = m.scoreOverride?.home ?? m.score.home;
-        const aR = m.scoreOverride?.away ?? m.score.away;
-        const pts = calculatePoints(p.home, p.away, hR, aR, p.isJoker);
-        p.points = pts;
-        await p.save();
-      }
-    }
-    // 2. Bonus za mistrza (+10 pkt)
-    if (settings.tournamentWinner && player.predictedWinner === settings.tournamentWinner) {
-      // Logika punktów za mistrza jest doliczana w locie w Rankingu, 
-      // lub możemy tu dodać pole 'bonusPoints' w modelu Player.
+  for (const match of matches) {
+    const homeScore = match.scoreOverride?.home ?? match.score.home;
+    const awayScore = match.scoreOverride?.away ?? match.score.away;
+    if (homeScore === null || awayScore === null) continue;
+    const predictions = await Prediction.find({ matchId: match._id });
+    for (const pred of predictions) {
+      const pts = calculatePoints(pred.home, pred.away, homeScore, awayScore, pred.isJoker);
+      if (pred.points !== pts) { pred.points = pts; await pred.save(); }
     }
   }
-  revalidatePath('/leaderboard'); revalidatePath('/admin');
-  return { success: true, message: "Ranking przeliczony!" };
+  revalidatePath('/admin'); revalidatePath('/leaderboard'); revalidatePath('/p/[token]', 'page');
+  return { success: true, message: `Przeliczono punkty dla wszystkich graczy.` };
+}
+
+export async function syncMatchesAction(adminSecret: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła.' };
+  const result = await syncMatchesFromAPI();
+  revalidatePath('/'); revalidatePath('/schedule'); revalidatePath('/admin'); revalidatePath('/bracket');
+  return { success: true, message: `Zsynchronizowano! Dodano: ${result.added}, Info: ${result.updated}` };
 }
 
 export async function getAdminData(adminSecret: string) {
@@ -75,23 +82,77 @@ export async function getAdminData(adminSecret: string) {
   return { success: true, players: JSON.parse(JSON.stringify(players)), settings: JSON.parse(JSON.stringify(settings)), matches: JSON.parse(JSON.stringify(matches)) };
 }
 
-export async function deletePlayerAction(adminSecret: string, id: string) {
+export async function togglePlayerBlock(adminSecret: string, playerId: string, currentStatus: boolean) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
   await connectToDatabase();
-  await Prediction.deleteMany({ playerId: id });
-  await Player.findByIdAndDelete(id);
-  revalidatePath('/admin');
+  await Player.findByIdAndUpdate(playerId, { blocked: !currentStatus });
+  revalidatePath('/admin'); revalidatePath('/leaderboard');
   return { success: true };
 }
 
-export async function togglePlayerBlock(id: string, status: boolean) {
+export async function deletePlayerAction(adminSecret: string, playerId: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
   await connectToDatabase();
-  await Player.findByIdAndUpdate(id, { blocked: !status });
-  revalidatePath('/admin');
+  await Prediction.deleteMany({ playerId });
+  await Player.findByIdAndDelete(playerId);
+  revalidatePath('/admin'); revalidatePath('/leaderboard');
   return { success: true };
 }
 
-export async function updateWinnerSelection(adminSecret: string, playerId: string, team: string) {
+export async function getPlayerPredictionsForAdmin(adminSecret: string, playerId: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
   await connectToDatabase();
-  await Player.findByIdAndUpdate(playerId, { predictedWinner: team });
+  const matches = await Match.find().sort({ kickoffUtc: 1 }).lean();
+  const predictions = await Prediction.find({ playerId }).lean();
+  return { success: true, matches: JSON.parse(JSON.stringify(matches)), predictions: JSON.parse(JSON.stringify(predictions)) };
+}
+
+export async function adminOverridePrediction(adminSecret: string, playerId: string, matchId: string, home: number, away: number) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
+  await connectToDatabase();
+  await Prediction.findOneAndUpdate({ playerId, matchId }, { home, away }, { upsert: true });
   return { success: true };
+}
+
+export async function exportLeaderboardCSV(adminSecret: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
+  await connectToDatabase();
+  const players = await Player.find({ blocked: false }).lean();
+  const predictions = await Prediction.find({ points: { $ne: null } }).lean();
+  const stats = players.map(player => {
+    const pPreds = predictions.filter(p => p.playerId.toString() === player._id.toString());
+    const totalPoints = pPreds.reduce((sum, p) => sum + (p.points || 0), 0);
+    const exactHits = pPreds.filter(p => p.points === 3).length;
+    return { nick: player.nick, company: player.company, totalPoints, exactHits };
+  });
+  stats.sort((a, b) => b.totalPoints - a.totalPoints || b.exactHits - a.exactHits || a.nick.localeCompare(b.nick));
+  let csv = 'Pozycja,Nick,Firma,Punkty,DokladneTrafienia\n';
+  stats.forEach((s, i) => { csv += `${i + 1},${s.nick},${s.company || 'Ogólna'},${s.totalPoints},${s.exactHits}\n`; });
+  return { success: true, csv };
+}
+
+export async function superEditMatchAction(adminSecret: string, matchId: string, payload: any) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Odmowa dostępu' };
+  await connectToDatabase();
+  try {
+    const updateData: any = {
+      homeTeam: payload.homeTeam,
+      awayTeam: payload.awayTeam,
+      status: payload.status,
+      kickoffUtc: new Date(payload.kickoffUtc)
+    };
+    if (payload.homeScore !== '' && payload.awayScore !== '') {
+      updateData.scoreOverride = {
+        home: parseInt(payload.homeScore),
+        away: parseInt(payload.awayScore),
+        updatedAt: new Date()
+      };
+      if (payload.status !== 'SCHEDULED') updateData.status = 'FINISHED';
+    } else {
+      updateData.scoreOverride = null;
+    }
+    await Match.findByIdAndUpdate(matchId, updateData);
+    revalidatePath('/admin'); revalidatePath('/schedule'); revalidatePath('/bracket'); revalidatePath('/p/[token]', 'page');
+    return { success: true, message: `Zapisano zmiany w meczu!` };
+  } catch (error) { return { error: 'Błąd podczas aktualizacji meczu.' }; }
 }
