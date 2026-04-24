@@ -1,25 +1,10 @@
-export function calculatePoints(
-  predictedHome: number, 
-  predictedAway: number, 
-  actualHome: number, 
-  actualAway: number
-): number {
-  // 3 pkt – idealny wynik (dokładny score)
-  if (predictedHome === actualHome && predictedAway === actualAway) {
-    return 3;
+export function calculatePoints(hP: number, aP: number, hR: number, aR: number, isJoker: boolean = false): number {
+  let pts = 0;
+  if (hP === hR && aP === aR) {
+    pts = 3; // Idealny wynik
+  } else if ((hP > aP && hR > aR) || (hP < aP && hR < aR) || (hP === aP && hR === aR)) {
+    pts = 1; // Trafiony zwycięzca / remis
   }
-
-  // 1 pkt – trafiony rezultat (1X2)
-  const predictedDiff = predictedHome - predictedAway;
-  const actualDiff = actualHome - actualAway;
-
-  const predictedResult = predictedDiff > 0 ? 'HOME' : predictedDiff < 0 ? 'AWAY' : 'DRAW';
-  const actualResult = actualDiff > 0 ? 'HOME' : actualDiff < 0 ? 'AWAY' : 'DRAW';
-
-  if (predictedResult === actualResult) {
-    return 1;
-  }
-
-  // 0 pkt – inaczej
-  return 0;
+  
+  return isJoker ? pts * 2 : pts;
 }

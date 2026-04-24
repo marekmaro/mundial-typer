@@ -4,7 +4,9 @@ export interface IPlayer extends Document {
   nick: string;
   tokenHash: string;
   blocked: boolean;
-  company: string; // NOWE POLE: Firma
+  company: string;
+  predictedWinner?: string; // Wytypowany mistrz
+  badges: string[]; // Lista odznak (np. 'fire', 'shield')
   createdAt: Date;
 }
 
@@ -13,6 +15,8 @@ const PlayerSchema: Schema = new Schema({
   tokenHash: { type: String, required: true, unique: true },
   blocked: { type: Boolean, default: false },
   company: { type: String, default: 'Ogólna' },
+  predictedWinner: { type: String },
+  badges: { type: [String], default: [] },
   createdAt: { type: Date, default: Date.now },
 });
 

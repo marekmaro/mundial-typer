@@ -20,6 +20,18 @@ export async function createPlayerLink(nick: string, company: string, adminSecre
   } catch (error) { return { error: 'Błąd tworzenia gracza.' }; }
 }
 
+export async function regeneratePlayerLink(adminSecret: string, playerId: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Nieprawidłowe hasło.' };
+  await connectToDatabase();
+  try {
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    await Player.findByIdAndUpdate(playerId, { tokenHash });
+    revalidatePath('/admin');
+    return { success: true, token: rawToken };
+  } catch (error) { return { error: 'Błąd podczas odnawiania linku.' }; }
+}
+
 export async function recalculateAllPoints(adminSecret: string) {
   if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła.' };
   await connectToDatabase();
@@ -96,8 +108,6 @@ export async function exportLeaderboardCSV(adminSecret: string) {
   return { success: true, csv };
 }
 
-// --- NOWE FUNKCJE DLA SUPER-EDYTA MECZÓW ---
-
 export async function getAllMatchesAdmin(adminSecret: string) {
   if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Odmowa dostępu' };
   await connectToDatabase();
@@ -108,7 +118,6 @@ export async function getAllMatchesAdmin(adminSecret: string) {
 export async function superEditMatchAction(adminSecret: string, matchId: string, payload: any) {
   if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Odmowa dostępu' };
   await connectToDatabase();
-  
   try {
     const updateData: any = {
       homeTeam: payload.homeTeam,
@@ -116,24 +125,18 @@ export async function superEditMatchAction(adminSecret: string, matchId: string,
       status: payload.status,
       kickoffUtc: new Date(payload.kickoffUtc)
     };
-
-    // Obsługa ręcznego wyniku (override)
     if (payload.homeScore !== '' && payload.awayScore !== '') {
       updateData.scoreOverride = {
         home: parseInt(payload.homeScore),
         away: parseInt(payload.awayScore),
         updatedAt: new Date()
       };
-      // Jeśli podano wynik z palca, możemy bezpiecznie wymusić status na FINISHED
       if (payload.status !== 'SCHEDULED') updateData.status = 'FINISHED';
     } else {
-      updateData.scoreOverride = null; // Czyszczenie override'a
+      updateData.scoreOverride = null;
     }
-
     await Match.findByIdAndUpdate(matchId, updateData);
     revalidatePath('/admin'); revalidatePath('/schedule'); revalidatePath('/bracket'); revalidatePath('/p/[token]', 'page');
     return { success: true, message: `Zapisano zmiany w meczu!` };
-  } catch (error) { 
-    return { error: 'Błąd podczas aktualizacji meczu.' }; 
-  }
+  } catch (error) { return { error: 'Błąd podczas aktualizacji meczu.' }; }
 }

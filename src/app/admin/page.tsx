@@ -1,8 +1,8 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { createPlayerLink, recalculateAllPoints, syncMatchesAction, getPlayersList, togglePlayerBlock, deletePlayerAction, getPlayerPredictionsForAdmin, adminOverridePrediction, exportLeaderboardCSV, getAllMatchesAdmin, superEditMatchAction } from '@/actions/admin';
+import { createPlayerLink, recalculateAllPoints, syncMatchesAction, getPlayersList, togglePlayerBlock, deletePlayerAction, getPlayerPredictionsForAdmin, adminOverridePrediction, exportLeaderboardCSV, getAllMatchesAdmin, superEditMatchAction, regeneratePlayerLink } from '@/actions/admin';
 import { QRCodeSVG } from 'qrcode.react';
-import { Shield, UserPlus, RefreshCw, Calculator, Copy, Check, LogIn, Users, Ban, Edit3, Trash2, ChevronLeft, Download, Search } from 'lucide-react';
+import { Shield, UserPlus, RefreshCw, Calculator, Copy, Check, LogIn, Users, Ban, Edit3, Trash2, ChevronLeft, Download, Search, QrCode, X } from 'lucide-react';
 
 export default function AdminPage() {
   const [secret, setSecret] = useState('');
@@ -22,6 +22,9 @@ export default function AdminPage() {
   const [editingPlayer, setEditingPlayer] = useState<any>(null);
   const [playerMatches, setPlayerMatches] = useState<any[]>([]);
   const [playerPreds, setPlayerPreds] = useState<any[]>([]);
+
+  // Modal odzyskiwania linku
+  const [qrModal, setQrModal] = useState<{ isOpen: boolean, link: string, nick: string }>({ isOpen: false, link: '', nick: '' });
 
   useEffect(() => { setAppUrl(window.location.origin); }, []);
 
@@ -56,24 +59,41 @@ export default function AdminPage() {
     }
   };
 
+  const handleRegenerateLink = async (playerId: string, playerNick: string) => {
+    if(!confirm(`Czy wygenerować nowy link dla ${playerNick}? Stary link przestanie działać!`)) return;
+    const res = await actionWrapper(() => regeneratePlayerLink(secret, playerId));
+    if (res.success && res.token) {
+      setQrModal({ isOpen: true, link: `${appUrl}/p/${res.token}`, nick: playerNick });
+    }
+  };
+
+  const downloadQR = (elementId: string, fileName: string) => {
+    const svg = document.getElementById(elementId);
+    if (!svg) return;
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handleSuperEditMatch = async (matchId: string, e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
     const payload = {
-      homeTeam: f.get('homeTeam'),
-      awayTeam: f.get('awayTeam'),
-      kickoffUtc: f.get('kickoffUtc'),
-      status: f.get('status'),
-      homeScore: f.get('homeScore'),
-      awayScore: f.get('awayScore')
+      homeTeam: f.get('homeTeam'), awayTeam: f.get('awayTeam'), kickoffUtc: f.get('kickoffUtc'),
+      status: f.get('status'), homeScore: f.get('homeScore'), awayScore: f.get('awayScore')
     };
     await actionWrapper(() => superEditMatchAction(secret, matchId, payload));
     loadData();
   };
 
   const toLocalISOString = (dateStr: string) => {
-    const d = new Date(dateStr);
-    const pad = (num: number) => num.toString().padStart(2, '0');
+    const d = new Date(dateStr); const pad = (num: number) => num.toString().padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
 
@@ -95,11 +115,37 @@ export default function AdminPage() {
     m.awayTeam.toLowerCase().includes(matchSearch.toLowerCase()) ||
     m.stage.toLowerCase().includes(matchSearch.toLowerCase())
   );
-
   const uniqueCompanies = Array.from(new Set(players.map(p => p.company))).filter(Boolean);
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8">
+    <div className="max-w-6xl mx-auto space-y-8 relative">
+      
+      {/* MODAL QR CODE */}
+      {qrModal.isOpen && (
+        <div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl relative">
+            <button onClick={() => setQrModal({ isOpen: false, link: '', nick: '' })} className="absolute top-4 right-4 text-slate-400 hover:text-slate-800"><X size={24} /></button>
+            <h3 className="text-2xl font-black text-slate-900 mb-1 text-center">Dostęp Odzyskany</h3>
+            <p className="text-sm font-bold text-slate-500 text-center mb-6">Gracz: {qrModal.nick}</p>
+            
+            <div className="flex justify-center mb-6 bg-slate-50 p-4 rounded-2xl border-2 border-slate-100">
+              <QRCodeSVG id="qr-modal-svg" value={qrModal.link} size={200} />
+            </div>
+            
+            <div className="flex bg-white border-2 border-slate-200 rounded-xl overflow-hidden shadow-sm mb-4">
+              <input type="text" readOnly value={qrModal.link} className="w-full px-3 py-3 text-[10px] font-bold text-slate-600 outline-none bg-transparent" />
+              <button onClick={() => { navigator.clipboard.writeText(qrModal.link); setCopied(true); setTimeout(()=>setCopied(false), 2000); }} className="px-4 bg-slate-100 hover:bg-slate-200 border-l-2 border-slate-200 transition">
+                {copied ? <Check size={18} className="text-emerald-600" /> : <Copy size={18} className="text-slate-700" />}
+              </button>
+            </div>
+
+            <button onClick={() => downloadQR("qr-modal-svg", `Zaproszenie_${qrModal.nick}.svg`)} className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-3 rounded-xl flex justify-center items-center gap-2 transition shadow-lg shadow-slate-900/20">
+              <Download size={18} /> Pobierz kod QR
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div className="flex items-center gap-3">
           <Shield className="text-emerald-600" size={36} />
@@ -134,13 +180,14 @@ export default function AdminPage() {
             {generatedLink && (
               <div className="mt-6 p-5 bg-slate-50 border-2 border-slate-200 rounded-2xl space-y-4 text-center">
                 <p className="text-sm font-black text-slate-800">Gotowe! Wyślij ten link graczowi:</p>
-                <div className="flex bg-white border-2 border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                  <input type="text" readOnly value={generatedLink} className="w-full px-4 py-2.5 text-xs font-bold text-slate-600 outline-none bg-transparent" />
+                <div className="flex bg-white border-2 border-slate-200 rounded-xl overflow-hidden shadow-sm mb-4">
+                  <input type="text" readOnly value={generatedLink} className="w-full px-4 py-2.5 text-[10px] font-bold text-slate-600 outline-none bg-transparent" />
                   <button onClick={() => { navigator.clipboard.writeText(generatedLink); setCopied(true); setTimeout(()=>setCopied(false), 2000); }} className="px-5 bg-slate-100 hover:bg-slate-200 border-l-2 border-slate-200 transition">
                     {copied ? <Check size={20} className="text-emerald-600" /> : <Copy size={20} className="text-slate-700" />}
                   </button>
                 </div>
-                <div className="pt-3 flex justify-center"><QRCodeSVG value={generatedLink} size={160} /></div>
+                <div className="pt-2 flex justify-center bg-white p-4 rounded-2xl border border-slate-100 inline-block mx-auto mb-4"><QRCodeSVG id="qr-new-player" value={generatedLink} size={160} /></div>
+                <button onClick={() => downloadQR("qr-new-player", `Zaproszenie_Typer.svg`)} className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center justify-center gap-1 mx-auto"><Download size={14} /> Pobierz QR</button>
               </div>
             )}
           </div>
@@ -162,15 +209,18 @@ export default function AdminPage() {
               <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
                 {players.length === 0 ? <p className="text-slate-500 text-sm font-bold">Brak graczy.</p> : (
                   players.map(p => (
-                    <div key={p._id} className={`p-4 border-2 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 transition ${p.blocked ? 'bg-red-50 border-red-200 opacity-80' : 'bg-white border-slate-100 hover:border-slate-200 shadow-sm hover:shadow'}`}>
-                      <div>
+                    <div key={p._id} className={`p-4 border-2 rounded-2xl flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 transition ${p.blocked ? 'bg-red-50 border-red-200 opacity-80' : 'bg-white border-slate-100 hover:border-slate-200 shadow-sm hover:shadow'}`}>
+                      <div className="w-full xl:w-auto">
                         <div className="font-black text-slate-900 text-lg leading-tight">{p.nick}</div>
                         <div className="text-[10px] font-black text-blue-600 uppercase tracking-widest mt-1">{p.company}</div>
                       </div>
-                      <div className="flex gap-2 w-full sm:w-auto">
-                        <button onClick={() => { setEditingPlayer(p); getPlayerPredictionsForAdmin(secret, p._id).then(r => { setPlayerMatches(r.matches); setPlayerPreds(r.predictions); }); }} className="flex-1 sm:flex-none bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-100 px-4 py-2 rounded-xl font-bold text-xs transition">Typy</button>
-                        <button onClick={() => { actionWrapper(() => togglePlayerBlock(secret, p._id, p.blocked)); loadData(); }} className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 text-xs px-4 py-2 rounded-xl font-bold border transition-colors ${p.blocked ? 'bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-100 hover:bg-amber-100'}`}><Ban size={14} /> {p.blocked ? 'Odblokuj' : 'Blokuj'}</button>
-                        <button onClick={() => { if(confirm('Na pewno usunąć gracza i jego typy na stałe?')) { actionWrapper(() => deletePlayerAction(secret, p._id)); loadData(); } }} className="bg-red-50 text-red-700 hover:bg-red-100 border border-red-100 px-3 py-2 rounded-xl transition"><Trash2 size={16} /></button>
+                      <div className="flex flex-wrap gap-2 w-full xl:w-auto">
+                        {/* NOWY PRZYCISK ODZYSKIWANIA LINKU I QR */}
+                        <button onClick={() => handleRegenerateLink(p._id, p.nick)} className="flex-1 xl:flex-none flex items-center justify-center gap-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 px-3 py-2 rounded-xl font-bold text-xs transition" title="Pobierz Link / Kod QR"><QrCode size={14} /> Link / QR</button>
+                        
+                        <button onClick={() => { setEditingPlayer(p); getPlayerPredictionsForAdmin(secret, p._id).then(r => { setPlayerMatches(r.matches); setPlayerPreds(r.predictions); }); }} className="flex-1 xl:flex-none bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-100 px-3 py-2 rounded-xl font-bold text-xs transition">Typy</button>
+                        <button onClick={() => { actionWrapper(() => togglePlayerBlock(secret, p._id, p.blocked)); loadData(); }} className={`flex-1 xl:flex-none flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-xl font-bold border transition-colors ${p.blocked ? 'bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-100 hover:bg-amber-100'}`}><Ban size={14} /> {p.blocked ? 'Odblokuj' : 'Blokuj'}</button>
+                        <button onClick={() => { if(confirm('Na pewno usunąć gracza i jego typy na stałe?')) { actionWrapper(() => deletePlayerAction(secret, p._id)); loadData(); } }} className="flex-none bg-red-50 text-red-700 hover:bg-red-100 border border-red-100 px-3 py-2 rounded-xl transition"><Trash2 size={16} /></button>
                       </div>
                     </div>
                   ))
@@ -189,7 +239,7 @@ export default function AdminPage() {
               <div className="flex justify-between items-center mb-2">
                 <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Edit3 className="text-amber-500" size={28}/> Zarządzanie Meczami</h2>
               </div>
-              <p className="text-sm text-slate-600 font-bold mb-6">Pełna kontrola nad terminarzem. Możesz zmieniać daty i nadpisywać wyniki API.</p>
+              <p className="text-sm text-slate-800 font-bold mb-6">Pełna kontrola nad terminarzem. Możesz zmieniać daty i nadpisywać wyniki API.</p>
               
               <div className="relative mb-6">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
