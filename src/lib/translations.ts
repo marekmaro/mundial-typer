@@ -6,14 +6,31 @@ const TEAM_TRANSLATIONS: Record<string, string> = {
   'Germany': 'Niemcy', 'Ecuador': 'Ekwador', 'Ivory Coast': 'W.K.S.', 'Curaçao': 'Curacao',
   'Netherlands': 'Holandia', 'Japan': 'Japonia', 'Tunisia': 'Tunezja', 'Sweden': 'Szwecja',
   'Belgium': 'Belgia', 'Iran': 'Iran', 'Egypt': 'Egipt', 'New Zealand': 'Nowa Zel.',
-  'Spain': 'Hiszpania', 'Urugwaj': 'Urugwaj', 'Saudi Arabia': 'Arabia S.', 'Cape Verde': 'Wyspy ZP',
+  'Spain': 'Hiszpania', 'Uruguay': 'Urugwaj', 'Saudi Arabia': 'Arabia S.', 'Cape Verde': 'Wyspy ZP',
   'France': 'Francja', 'Senegal': 'Senegal', 'Norway': 'Norwegia', 'Iraq': 'Irak',
   'Argentina': 'Argentyna', 'Austria': 'Austria', 'Algeria': 'Algieria', 'Jordan': 'Jordania',
   'Portugal': 'Portugalia', 'Colombia': 'Kolumbia', 'Uzbekistan': 'Uzbekistan', 'DR Congo': 'DR Konga',
-  'England': 'Anglia', 'Croatia': 'Chorwacja', 'Panama': 'Panama', 'Ghana': 'Ghana'
+  'Congo DR': 'DR Konga', 'England': 'Anglia', 'Croatia': 'Chorwacja', 'Panama': 'Panama', 'Ghana': 'Ghana',
+  'Poland': 'Polska', 'Italy': 'Włochy', 'Denmark': 'Dania', 'Peru': 'Peru', 'Chile': 'Chile'
 };
 
-export function t(name: string | undefined): string {
-  if (!name) return '???';
-  return TEAM_TRANSLATIONS[name] || name;
+// Przywrócona funkcja skracająca długie nazwy dla telefonów
+const SHORT_NAMES: Record<string, string> = {
+  'Bośnia i Hercegowina': 'Bośnia',
+  'Wyspy Zielonego Przylądka': 'Wyspy Z.P.',
+  'Wybrzeże Kości Sł.': 'W.K.S.',
+  'Arabia Saudyjska': 'Arabia S.',
+  'Korea Południowa': 'Korea Płd.',
+  'Nowa Zelandia': 'Nowa Zel.',
+  'Stany Zjednoczone': 'USA'
+};
+
+export function t(teamName: string | undefined): string {
+  if (!teamName) return '???';
+  return TEAM_TRANSLATIONS[teamName] || teamName;
+}
+
+export function shortT(teamName: string | undefined): string {
+  const translated = t(teamName);
+  return SHORT_NAMES[translated] || translated;
 }
