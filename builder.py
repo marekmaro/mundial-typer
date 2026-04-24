@@ -1,293 +1,278 @@
 import os
 
 FILES = {
-    # 1. Nowy Model: Ustawienia Globalne
-    "src/models/Settings.ts": r"""import mongoose, { Schema, Document } from 'mongoose';
+    # 1. Wymuszenie nowej ikony w Metadata
+    "src/app/layout.tsx": r"""import type { Metadata } from "next";
+import { Inter } from "next/font/google";
+import "./globals.css";
+import Link from "next/link";
+import { Trophy, CalendarDays, BookOpen, Home, Network } from "lucide-react";
 
-export interface ISettings extends Document {
-  maintenanceMode: boolean;
-  globalMessage: string;
-  tournamentWinner: string;
-}
+const inter = Inter({ subsets: ["latin"] });
 
-const SettingsSchema = new Schema({
-  maintenanceMode: { type: Boolean, default: false },
-  globalMessage: { type: String, default: "" },
-  tournamentWinner: { type: String, default: "" }
-});
+export const metadata: Metadata = {
+  title: "Mistrzostwa FIFA 2026",
+  description: "Zabawa w typowanie wyników turnieju!",
+  icons: {
+    icon: '/icon.png',
+    shortcut: '/icon.png',
+    apple: '/icon.png',
+  },
+};
 
-export default mongoose.models.Settings || mongoose.model<ISettings>('Settings', SettingsSchema);
-""",
-
-    # 2. Aktualizacja Modelu Gracza (Przechowywanie jawnego tokenu)
-    "src/models/Player.ts": r"""import mongoose, { Schema, Document } from 'mongoose';
-
-export interface IPlayer extends Document {
-  nick: string;
-  tokenHash: string;
-  rawToken: string; // JAWNY TOKEN DO PODEJRZENIA
-  blocked: boolean;
-  company: string;
-  predictedWinner?: string;
-  createdAt: Date;
-}
-
-const PlayerSchema = new Schema({
-  nick: { type: String, required: true },
-  tokenHash: { type: String, required: true, unique: true },
-  rawToken: { type: String, required: true },
-  blocked: { type: Boolean, default: false },
-  company: { type: String, default: 'Ogólna' },
-  predictedWinner: { type: String },
-  createdAt: { type: Date, default: Date.now },
-});
-
-export default mongoose.models.Player || mongoose.model<IPlayer>('Player', PlayerSchema);
-""",
-
-    # 3. Server Actions (Logika Mistrza, Pauzy i Ogłoszeń)
-    "src/actions/admin.ts": r"""'use server';
-import connectToDatabase from '@/lib/db';
-import Player from '@/models/Player';
-import Match from '@/models/Match';
-import Prediction from '@/models/Prediction';
-import Settings from '@/models/Settings';
-import { calculatePoints } from '@/lib/scoring';
-import crypto from 'crypto';
-import { revalidatePath } from 'next/cache';
-import { syncMatchesFromAPI } from '@/lib/syncMundial';
-
-// Inicjalizacja ustawień jeśli nie istnieją
-async function getSettings() {
-  await connectToDatabase();
-  let s = await Settings.findOne();
-  if (!s) s = await Settings.create({ maintenanceMode: false, globalMessage: "", tournamentWinner: "" });
-  return s;
-}
-
-export async function createPlayerLink(nick: string, company: string, adminSecret: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Błąd hasła' };
-  await connectToDatabase();
-  const rawToken = crypto.randomBytes(16).toString('hex');
-  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-  await Player.create({ nick: nick.trim(), company: company.trim() || 'Ogólna', tokenHash, rawToken });
-  revalidatePath('/admin');
-  return { success: true, token: rawToken };
-}
-
-export async function updateGlobalSettings(adminSecret: string, data: any) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Błąd hasła' };
-  await connectToDatabase();
-  await Settings.findOneAndUpdate({}, data, { upsert: true });
-  revalidatePath('/admin'); revalidatePath('/p/[token]', 'page');
-  return { success: true, message: "Ustawienia zapisane!" };
-}
-
-export async function recalculateAllPoints(adminSecret: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Błąd hasła' };
-  await connectToDatabase();
-  const settings = await getSettings();
-  const matches = await Match.find({ status: 'FINISHED' });
-  
-  const players = await Player.find();
-  for (const player of players) {
-    let total = 0;
-    // 1. Punkty z meczów
-    const preds = await Prediction.find({ playerId: player._id });
-    for (const p of preds) {
-      const m = matches.find(match => match._id.toString() === p.matchId.toString());
-      if (m) {
-        const hR = m.scoreOverride?.home ?? m.score.home;
-        const aR = m.scoreOverride?.away ?? m.score.away;
-        const pts = calculatePoints(p.home, p.away, hR, aR, p.isJoker);
-        p.points = pts;
-        await p.save();
-      }
-    }
-    // 2. Bonus za mistrza (+10 pkt)
-    if (settings.tournamentWinner && player.predictedWinner === settings.tournamentWinner) {
-      // Logika punktów za mistrza jest doliczana w locie w Rankingu, 
-      // lub możemy tu dodać pole 'bonusPoints' w modelu Player.
-    }
-  }
-  revalidatePath('/leaderboard'); revalidatePath('/admin');
-  return { success: true, message: "Ranking przeliczony!" };
-}
-
-export async function getAdminData(adminSecret: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak dostępu' };
-  await connectToDatabase();
-  const players = await Player.find().sort({ createdAt: -1 }).lean();
-  const settings = await getSettings();
-  const matches = await Match.find().sort({ kickoffUtc: 1 }).lean();
-  return { success: true, players: JSON.parse(JSON.stringify(players)), settings: JSON.parse(JSON.stringify(settings)), matches: JSON.parse(JSON.stringify(matches)) };
-}
-
-export async function deletePlayerAction(adminSecret: string, id: string) {
-  await connectToDatabase();
-  await Prediction.deleteMany({ playerId: id });
-  await Player.findByIdAndDelete(id);
-  revalidatePath('/admin');
-  return { success: true };
-}
-
-export async function togglePlayerBlock(id: string, status: boolean) {
-  await connectToDatabase();
-  await Player.findByIdAndUpdate(id, { blocked: !status });
-  revalidatePath('/admin');
-  return { success: true };
-}
-
-export async function updateWinnerSelection(adminSecret: string, playerId: string, team: string) {
-  await connectToDatabase();
-  await Player.findByIdAndUpdate(playerId, { predictedWinner: team });
-  return { success: true };
-}
-""",
-
-    # 4. Panel Admina - Nowe Zakładki i jawne linki
-    "src/app/admin/page.tsx": r"""'use client';
-import { useState, useEffect } from 'react';
-import { createPlayerLink, recalculateAllPoints, syncMatchesAction, getAdminData, deletePlayerAction, togglePlayerBlock, updateGlobalSettings } from '@/actions/admin';
-import { Shield, UserPlus, RefreshCw, Calculator, Copy, Check, LogIn, Users, Ban, Edit3, Trash2, LayoutDashboard, Settings, Bell, Lock } from 'lucide-react';
-
-export default function AdminPage() {
-  const [secret, setSecret] = useState('');
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'PLAYERS' | 'SETTINGS'>('DASHBOARD');
-  
-  const [data, setData] = useState<any>({ players: [], settings: {}, matches: [] });
-  const [loading, setLoading] = useState(false);
-  const [nick, setNick] = useState('');
-  const [company, setCompany] = useState('');
-  const [copiedId, setCopiedId] = useState('');
-
-  const load = async () => {
-    const res = await getAdminData(secret);
-    if (res.success) setData(res);
-  };
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const res = await getAdminData(secret);
-    if (res.success) { setIsLoggedIn(true); setData(res); }
-  };
-
-  const copyLink = (token: string, id: string) => {
-    const link = `${window.location.origin}/p/${token}`;
-    navigator.clipboard.writeText(link);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(''), 2000);
-  };
-
-  if (!isLoggedIn) {
-    return (
-      <div className="max-w-md mx-auto mt-20 bg-white p-10 rounded-[2.5rem] shadow-2xl border border-slate-100">
-        <Shield className="mx-auto text-emerald-500 mb-6" size={60} />
-        <form onSubmit={handleLogin} className="space-y-5">
-          <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Hasło panelu Mar0" className="w-full px-6 py-4 rounded-2xl border-2 border-slate-100 outline-none focus:border-emerald-400 font-bold" required />
-          <button type="submit" className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl hover:bg-emerald-600 transition-all">WEJDŹ</button>
-        </form>
-      </div>
-    );
-  }
-
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode; }>) {
   return (
-    <div className="max-w-6xl mx-auto space-y-8 px-4">
-      {/* Menu Zakładek */}
-      <div className="flex bg-white p-2 rounded-3xl shadow-sm border border-slate-100 gap-2 overflow-x-auto scrollbar-hide">
-        <button onClick={() => setActiveTab('DASHBOARD')} className={`flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl font-black text-sm transition ${activeTab === 'DASHBOARD' ? 'bg-slate-900 text-white' : 'text-slate-400 hover:bg-slate-50'}`}><LayoutDashboard size={18}/> PANEL</button>
-        <button onClick={() => setActiveTab('PLAYERS')} className={`flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl font-black text-sm transition ${activeTab === 'PLAYERS' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-50'}`}><Users size={18}/> GRACZE</button>
-        <button onClick={() => setActiveTab('SETTINGS')} className={`flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl font-black text-sm transition ${activeTab === 'SETTINGS' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:bg-slate-50'}`}><Settings size={18}/> USTAWIENIA</button>
-      </div>
-
-      {activeTab === 'DASHBOARD' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
-              <h2 className="text-2xl font-black text-slate-900 mb-6 flex items-center gap-3"><Bell className="text-amber-500" /> Tablica Ogłoszeń</h2>
-              <textarea 
-                defaultValue={data.settings.globalMessage}
-                onBlur={(e) => updateGlobalSettings(secret, { globalMessage: e.target.value })}
-                placeholder="Wpisz ważną wiadomość dla wszystkich graczy..."
-                className="w-full h-32 p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-amber-400 font-bold text-slate-700"
+    <html lang="pl">
+      <body className={`${inter.className} bg-slate-50 text-slate-900 min-h-screen flex flex-col`}>
+        <nav className="bg-slate-900 text-white shadow-lg sticky top-0 z-50">
+          <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+            <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+              <img 
+                src="https://upload.wikimedia.org/wikipedia/en/thumb/1/17/2026_FIFA_World_Cup_emblem.svg/1920px-2026_FIFA_World_Cup_emblem.svg.png" 
+                alt="World Cup 2026 Logo" 
+                className="h-10 w-auto object-contain invert brightness-0 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]"
               />
-              <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-widest">Zapisuje się automatycznie po kliknięciu poza pole</p>
-           </div>
-           
-           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col justify-center gap-4">
-              <button onClick={() => recalculateAllPoints(secret)} className="w-full py-6 bg-emerald-500 text-white rounded-3xl font-black text-xl shadow-lg shadow-emerald-500/20 hover:scale-[1.02] transition-transform flex items-center justify-center gap-3"><Calculator /> PRZELICZ RANKING</button>
-              <button onClick={() => syncMatchesAction(secret).then(() => load())} className="w-full py-4 bg-slate-100 text-slate-600 rounded-2xl font-black hover:bg-slate-200 transition-colors flex items-center justify-center gap-3"><RefreshCw /> SYNCHRONIZUJ API</button>
-           </div>
-        </div>
-      )}
-
-      {activeTab === 'PLAYERS' && (
-        <div className="space-y-6">
-          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
-            <h2 className="text-2xl font-black text-slate-900 mb-6 flex items-center gap-3"><UserPlus className="text-blue-500"/> Nowy Gracz</h2>
-            <div className="flex flex-col md:flex-row gap-4">
-               <input type="text" value={nick} onChange={(e) => setNick(e.target.value)} placeholder="Nick..." className="flex-1 px-6 py-4 bg-slate-50 rounded-2xl border-2 border-slate-100 outline-none focus:border-blue-400 font-bold" />
-               <input type="text" value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Firma..." className="flex-1 px-6 py-4 bg-slate-50 rounded-2xl border-2 border-slate-100 outline-none focus:border-blue-400 font-bold" />
-               <button onClick={() => createPlayerLink(nick, company, secret).then(() => {setNick(''); setCompany(''); load();})} className="bg-blue-600 text-white px-10 py-4 rounded-2xl font-black">DODAJ</button>
+              <span className="text-xl md:text-2xl font-black tracking-wider text-emerald-400">
+                Mistrzostwa FIFA 2026
+              </span>
+            </Link>
+            <div className="flex gap-4 sm:gap-6 font-medium text-sm sm:text-base overflow-x-auto w-full md:w-auto justify-start md:justify-center pb-2 md:pb-0 scrollbar-hide">
+              <Link href="/" className="hover:text-emerald-400 flex items-center gap-1 shrink-0 transition-colors"><Home size={18}/> Start</Link>
+              <Link href="/schedule" className="hover:text-emerald-400 flex items-center gap-1 shrink-0 transition-colors"><CalendarDays size={18}/> Terminarz</Link>
+              <Link href="/bracket" className="hover:text-emerald-400 flex items-center gap-1 shrink-0 transition-colors"><Network size={18}/> Drabinka</Link>
+              <Link href="/leaderboard" className="hover:text-emerald-400 flex items-center gap-1 shrink-0 transition-colors"><Trophy size={18}/> Ranking</Link>
+              <Link href="/rules" className="hover:text-emerald-400 flex items-center gap-1 shrink-0 transition-colors"><BookOpen size={18}/> Zasady</Link>
             </div>
           </div>
+        </nav>
+        <main className="flex-grow max-w-6xl mx-auto w-full px-4 py-8">
+          {children}
+        </main>
+        <footer className="bg-slate-200 text-center py-8 text-slate-500 mt-auto border-t border-slate-300">
+          <p className="font-black text-sm text-slate-800 tracking-widest uppercase mb-1">Mistrzostwa FIFA 2026 &copy; {new Date().getFullYear()}</p>
+          <p className="text-xs font-bold">Stworzone by <span className="text-slate-900 font-black">Mar0</span></p>
+        </footer>
+      </body>
+    </html>
+  );
+}
+""",
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {data.players.map((p: any) => (
-              <div key={p._id} className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col justify-between gap-4">
-                 <div>
-                   <div className="font-black text-xl text-slate-900">{p.nick}</div>
-                   <div className="text-[10px] font-black text-blue-500 uppercase tracking-widest">{p.company}</div>
-                 </div>
-                 <div className="flex gap-2">
-                    <button onClick={() => copyLink(p.rawToken, p._id)} className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${copiedId === p._id ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white'}`}>
-                       {copiedId === p._id ? 'SKOPIOWANO!' : 'KOPIUJ LINK'}
-                    </button>
-                    <button onClick={() => deletePlayerAction(secret, p._id).then(() => load())} className="p-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-100"><Trash2 size={18}/></button>
-                 </div>
-              </div>
-            ))}
-          </div>
+    # 2. Akcje dla Jokera i Mistrza
+    "src/actions/predictions.ts": r"""'use server';
+import connectToDatabase from '@/lib/db';
+import Prediction from '@/models/Prediction';
+import Player from '@/models/Player';
+import { revalidatePath } from 'next/cache';
+
+export async function submitPrediction(payload: { playerId: string, matchId: string, home: number, away: number, isJoker: boolean }) {
+  await connectToDatabase();
+  try {
+    await Prediction.findOneAndUpdate(
+      { playerId: payload.playerId, matchId: payload.matchId },
+      { home: payload.home, away: payload.away, isJoker: payload.isJoker, updatedAt: new Date() },
+      { upsert: true }
+    );
+    revalidatePath('/p/[token]', 'page');
+    return { success: true };
+  } catch (error) {
+    return { error: 'Błąd zapisu.' };
+  }
+}
+
+export async function saveWinnerPrediction(playerId: string, team: string) {
+  await connectToDatabase();
+  try {
+    await Player.findByIdAndUpdate(playerId, { predictedWinner: team });
+    revalidatePath('/p/[token]', 'page');
+    return { success: true };
+  } catch (error) {
+    return { error: 'Błąd zapisu mistrza.' };
+  }
+}
+""",
+
+    # 3. Karta Typowania z Jokerem
+    "src/components/PredictionCard.tsx": r"""'use client';
+import { useState } from 'react';
+import { submitPrediction } from '@/actions/predictions';
+import { format } from 'date-fns';
+import { pl } from 'date-fns/locale';
+import TeamFlag from './TeamFlag';
+import { t, shortT } from '@/lib/translations';
+import { Star } from 'lucide-react';
+
+export default function PredictionCard({ match, prediction, playerId }: { match: any, prediction: any, playerId: string }) {
+  const [home, setHome] = useState(prediction?.home ?? '');
+  const [away, setAway] = useState(prediction?.away ?? '');
+  const [isJoker, setIsJoker] = useState(prediction?.isJoker ?? false);
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState({ text: '', type: '' });
+
+  const isLocked = new Date() > new Date(new Date(match.kickoffUtc).getTime() - 12 * 60 * 60 * 1000) || match.status !== 'SCHEDULED';
+  const dateStr = format(new Date(match.kickoffUtc), "d MMM, HH:mm", { locale: pl });
+
+  const handleSave = async () => {
+    if (home === '' || away === '') return;
+    setLoading(true);
+    const res = await submitPrediction({
+      playerId, matchId: match._id.toString(),
+      home: parseInt(home), away: parseInt(away), isJoker
+    });
+    setMsg({ text: res.success ? 'Zapisano!' : (res.error || 'Błąd'), type: res.success ? 'success' : 'error' });
+    setTimeout(() => setMsg({ text: '', type: '' }), 3000);
+    setLoading(false);
+  };
+
+  return (
+    <div className={`bg-white rounded-2xl border-2 p-5 shadow-sm relative overflow-hidden transition-all ${isLocked ? 'border-slate-100 opacity-90' : 'border-slate-200 hover:border-emerald-400'}`}>
+      <div className="flex justify-between items-center mb-4 text-[10px] font-black tracking-wider text-slate-400 uppercase">
+        <span>{match.stage} {match.group && <span className="text-slate-600">&bull; {match.group}</span>}</span>
+        <div className="flex items-center gap-2">
+          {!isLocked ? (
+             <button onClick={() => setIsJoker(!isJoker)} className={`flex items-center gap-1 px-3 py-1 rounded-full transition-all ${isJoker ? 'bg-amber-400 text-white shadow-md' : 'bg-slate-100 text-slate-400 hover:bg-amber-100 hover:text-amber-600'}`}>
+               <Star size={12} fill={isJoker ? "white" : "none"} /> JOKER x2
+             </button>
+          ) : (
+             isJoker && <div className="bg-amber-100 text-amber-600 px-3 py-1 rounded-full flex items-center gap-1"><Star size={12} fill="currentColor" /> JOKER</div>
+          )}
+          <span className={isLocked ? 'text-slate-400' : 'text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded'}>{isLocked ? 'ZABLOKOWANE' : 'OTWARTE'}</span>
         </div>
-      )}
-
-      {activeTab === 'SETTINGS' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
-              <h2 className="text-2xl font-black text-slate-900 mb-2 flex items-center gap-3"><Lock className="text-red-500" /> Pauza Turniejowa</h2>
-              <p className="text-sm font-bold text-slate-500 mb-6">Blokuje dostęp graczy do ich paneli.</p>
-              <button 
-                onClick={() => updateGlobalSettings(secret, { maintenanceMode: !data.settings.maintenanceMode })}
-                className={`w-full py-4 rounded-2xl font-black transition-all ${data.settings.maintenanceMode ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white shadow-lg shadow-red-500/30'}`}
-              >
-                {data.settings.maintenanceMode ? 'WYŁĄCZ BLOKADĘ' : 'AKTYWUJ PRZERWĘ TECHNICZNĄ'}
-              </button>
-           </div>
-
-           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
-              <h2 className="text-2xl font-black text-slate-900 mb-2 flex items-center gap-3">🏆 Oficjalny Mistrz</h2>
-              <p className="text-sm font-bold text-slate-500 mb-6">Wybierz zwycięzcę, aby rozliczyć +10 pkt.</p>
-              <select 
-                defaultValue={data.settings.tournamentWinner}
-                onChange={(e) => updateGlobalSettings(secret, { tournamentWinner: e.target.value })}
-                className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none font-black text-slate-700 appearance-none"
-              >
-                 <option value="">-- Wybierz zwycięzcę --</option>
-                 <option value="Argentina">Argentyna</option>
-                 <option value="Brazil">Brazylia</option>
-                 <option value="Poland">Polska</option>
-                 <option value="France">Francja</option>
-                 {/* Lista uzupełni się sama przy wyborze */}
-              </select>
-           </div>
+      </div>
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mb-4">
+        <div className="flex flex-row sm:flex-col items-center gap-3 sm:flex-1 sm:text-center w-full justify-start">
+          <TeamFlag teamName={match.homeTeam} className="w-10 h-7 rounded-sm" />
+          <span className="font-black text-sm sm:text-sm leading-tight whitespace-pre-line text-slate-800" title={t(match.homeTeam)}>{shortT(match.homeTeam)}</span>
         </div>
-      )}
+        <div className="flex gap-2 px-3 bg-slate-50 p-2 rounded-2xl border border-slate-100">
+          <input type="number" value={home} onChange={(e) => setHome(e.target.value)} disabled={isLocked || loading} className="w-12 h-12 text-center text-xl font-black bg-white border-2 border-slate-200 rounded-xl outline-none focus:border-emerald-500" />
+          <span className="self-center font-black text-slate-300">:</span>
+          <input type="number" value={away} onChange={(e) => setAway(e.target.value)} disabled={isLocked || loading} className="w-12 h-12 text-center text-xl font-black bg-white border-2 border-slate-200 rounded-xl outline-none focus:border-emerald-500" />
+        </div>
+        <div className="flex flex-row-reverse sm:flex-col items-center gap-3 sm:flex-1 sm:text-center w-full justify-start">
+          <TeamFlag teamName={match.awayTeam} className="w-10 h-7 rounded-sm" />
+          <span className="font-black text-sm sm:text-sm leading-tight whitespace-pre-line text-slate-800" title={t(match.awayTeam)}>{shortT(match.awayTeam)}</span>
+        </div>
+      </div>
+      <div className="flex justify-between items-center mt-2 pt-3 border-t border-slate-100 text-[11px] font-bold">
+        <span className="text-slate-400">{dateStr}</span>
+        <div className="flex items-center gap-3">
+           {isLocked && prediction?.points !== null && prediction?.points !== undefined && (
+             <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-lg font-black text-xs">+{prediction.points} pkt</span>
+           )}
+           {!isLocked && <button onClick={handleSave} disabled={loading} className="bg-slate-900 hover:bg-emerald-600 text-white px-6 py-2.5 rounded-xl transition-colors font-black">Zapisz</button>}
+        </div>
+      </div>
+      {msg.text && <div className={`absolute top-0 left-0 w-full py-1 text-center text-[10px] uppercase text-white font-black tracking-widest ${msg.type === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`}>{msg.text}</div>}
     </div>
   );
 }
 """,
 
-    # 5. Panel Gracza - Obsługa Pauzy i Ogłoszeń
+    # 4. Klientowy Dashboard Gracza (Zakładki, Typowanie Mistrza)
+    "src/components/PlayerDashboardClient.tsx": r"""'use client';
+import { useState } from 'react';
+import PredictionCard from './PredictionCard';
+import { Trophy, Share2, Star, Check } from 'lucide-react';
+import { saveWinnerPrediction } from '@/actions/predictions';
+
+export default function PlayerDashboardClient({ player, matches, predictions, totalPoints, appUrl }: any) {
+  const [activeTab, setActiveTab] = useState<'GROUPS' | 'KNOCKOUT'>('GROUPS');
+  const [winner, setWinner] = useState(player.predictedWinner || '');
+  const [savingWinner, setSavingWinner] = useState(false);
+  const [winnerMsg, setWinnerMsg] = useState('');
+
+  // Sprawdzenie, czy turniej się rozpoczął (blokada mistrza)
+  const isTournamentStarted = matches.some((m: any) => m.status === 'LIVE' || m.status === 'FINISHED' || new Date() > new Date(new Date(m.kickoffUtc).getTime() - 12 * 60 * 60 * 1000));
+
+  const groupMatches = matches.filter((m: any) => m.stage.includes('Kolejka') || m.group);
+  const knockoutMatches = matches.filter((m: any) => !m.stage.includes('Kolejka') && !m.group);
+
+  const handleSaveWinner = async () => {
+    if (!winner) return;
+    setSavingWinner(true);
+    await saveWinnerPrediction(player._id, winner);
+    setWinnerMsg('Zapisano!');
+    setTimeout(() => setWinnerMsg(''), 3000);
+    setSavingWinner(false);
+  };
+
+  const waMessage = encodeURIComponent(`Hej! Typuję Mistrzostwa FIFA 2026 i mam już ${totalPoints} pkt! Zobacz ranking: ${appUrl}/leaderboard`);
+
+  return (
+    <div className="space-y-8">
+      {/* Nagłówek i WhatsApp */}
+      <div className="bg-slate-900 rounded-[2.5rem] p-8 text-white shadow-2xl relative overflow-hidden">
+        <div className="relative z-10 flex flex-col md:flex-row justify-between items-center gap-6">
+          <div className="text-center md:text-left">
+            <p className="text-emerald-400 font-black uppercase tracking-[0.2em] text-[10px] mb-2">Zawodnik</p>
+            <h1 className="text-4xl md:text-5xl font-black">{player.nick}</h1>
+            <div className="mt-5 flex justify-center md:justify-start">
+               <a href={`https://wa.me/?text=${waMessage}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 bg-[#25D366] text-white px-5 py-2.5 rounded-xl font-black text-xs hover:scale-105 transition-transform shadow-lg shadow-[#25D366]/20">
+                 <Share2 size={16}/> Wyślij na WhatsApp
+               </a>
+            </div>
+          </div>
+          <div className="bg-white/10 backdrop-blur-md border border-white/20 p-6 md:p-8 rounded-[2rem] flex items-center gap-5">
+            <Trophy className="text-amber-400" size={48} />
+            <div>
+              <p className="text-[11px] font-black uppercase tracking-widest text-slate-300">Twoje Punkty</p>
+              <p className="text-6xl font-black leading-none">{totalPoints}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Typowanie Mistrza */}
+      <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-6 sm:p-8 rounded-[2.5rem] text-white shadow-lg relative overflow-hidden border border-orange-400">
+         <div className="absolute right-0 top-0 opacity-20"><Trophy size={150} /></div>
+         <div className="relative z-10">
+           <h3 className="font-black uppercase tracking-widest text-sm mb-4 flex items-center gap-2 drop-shadow-md">🏆 Kto wygra Mundial 2026? (+10 pkt)</h3>
+           <div className="flex flex-col sm:flex-row gap-3 max-w-xl">
+              <input 
+                type="text" 
+                value={winner}
+                onChange={(e) => setWinner(e.target.value)}
+                disabled={isTournamentStarted || savingWinner}
+                placeholder="Wpisz nazwę państwa (np. Brazylia)..." 
+                className="flex-1 bg-white/20 border-2 border-white/40 rounded-xl px-5 py-4 outline-none font-black placeholder:text-white/60 text-white disabled:opacity-70 transition-colors focus:bg-white/30" 
+              />
+              <button 
+                onClick={handleSaveWinner}
+                disabled={isTournamentStarted || savingWinner || !winner}
+                className="bg-white text-orange-600 px-8 py-4 rounded-xl font-black text-sm hover:scale-105 transition-transform disabled:opacity-50 disabled:hover:scale-100 flex items-center justify-center gap-2 shadow-lg"
+              >
+                {winnerMsg ? <><Check size={18}/> Zapisano</> : 'ZAPISZ'}
+              </button>
+           </div>
+           {isTournamentStarted && <p className="text-xs font-black mt-3 text-white/80 bg-black/20 inline-block px-3 py-1 rounded-md">Turniej wystartował. Typowanie zablokowane.</p>}
+         </div>
+      </div>
+
+      {/* Zakładki Meczów */}
+      <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 flex gap-2 overflow-x-auto scrollbar-hide">
+        <button onClick={() => setActiveTab('GROUPS')} className={`flex-1 py-4 rounded-xl font-black text-sm transition ${activeTab === 'GROUPS' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>Faza Grupowa</button>
+        <button onClick={() => setActiveTab('KNOCKOUT')} className={`flex-1 py-4 rounded-xl font-black text-sm transition ${activeTab === 'KNOCKOUT' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>Faza Pucharowa</button>
+      </div>
+
+      {/* Lista meczów */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-10">
+        {activeTab === 'GROUPS' && groupMatches.length === 0 && <p className="text-center text-slate-500 font-bold py-10 col-span-full">Brak meczów grupowych.</p>}
+        {activeTab === 'GROUPS' && groupMatches.map((match: any) => (
+          <PredictionCard key={match._id.toString()} match={match} prediction={predictions.find((p:any) => p.matchId.toString() === match._id.toString())} playerId={player._id.toString()} />
+        ))}
+        
+        {activeTab === 'KNOCKOUT' && knockoutMatches.length === 0 && <p className="text-center text-slate-500 font-bold py-10 col-span-full">Brak meczów pucharowych.</p>}
+        {activeTab === 'KNOCKOUT' && knockoutMatches.map((match: any) => (
+          <PredictionCard key={match._id.toString()} match={match} prediction={predictions.find((p:any) => p.matchId.toString() === match._id.toString())} playerId={player._id.toString()} />
+        ))}
+      </div>
+    </div>
+  );
+}
+""",
+
+    # 5. Aktualizacja Głównej Strony Gracza (Renderuje Komponent Klienta)
     "src/app/p/[token]/page.tsx": r"""import connectToDatabase from '@/lib/db';
 import Player from '@/models/Player';
 import Match from '@/models/Match';
@@ -295,14 +280,17 @@ import Prediction from '@/models/Prediction';
 import Settings from '@/models/Settings';
 import crypto from 'crypto';
 import { notFound } from 'next/navigation';
-import PredictionCard from '@/components/PredictionCard';
-import { Trophy, Bell, Construction } from 'lucide-react';
+import PlayerDashboardClient from '@/components/PlayerDashboardClient';
+import { Construction, Bell } from 'lucide-react';
 
 export const revalidate = 0;
 
-export default async function PlayerDashboard({ params }: { params: Promise<{ token: string }> }) {
-  const { token } = await params;
+type Props = { params: Promise<{ token: string }> };
+
+export default async function PlayerDashboard(props: Props) {
+  const { token } = await props.params;
   await connectToDatabase();
+  
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   const player = await Player.findOne({ tokenHash, blocked: false }).lean();
   if (!player) notFound();
@@ -314,7 +302,7 @@ export default async function PlayerDashboard({ params }: { params: Promise<{ to
       <div className="min-h-[70vh] flex flex-col items-center justify-center text-center px-6">
         <Construction size={80} className="text-amber-500 mb-6 animate-bounce" />
         <h1 className="text-4xl font-black text-slate-900 mb-4">Konserwacja Systemu</h1>
-        <p className="text-slate-500 font-bold max-w-md text-lg">W tej chwili administrator wprowadza zmiany. Zapraszamy za chwilę!</p>
+        <p className="text-slate-500 font-bold max-w-md text-lg">Administrator wprowadza aktualizacje. Wróć za chwilę!</p>
       </div>
     );
   }
@@ -324,72 +312,92 @@ export default async function PlayerDashboard({ params }: { params: Promise<{ to
   const totalPoints = predictions.reduce((sum, p) => sum + (p.points || 0), 0);
 
   return (
-    <div className="max-w-4xl mx-auto px-4 space-y-6 pb-20">
+    <div className="max-w-5xl mx-auto px-4">
       {settings.globalMessage && (
-        <div className="bg-amber-100 border-2 border-amber-200 p-4 rounded-3xl flex items-center gap-4 text-amber-800 shadow-sm animate-pulse">
-          <Bell className="shrink-0" />
+        <div className="bg-amber-100 border-2 border-amber-300 p-4 rounded-2xl flex items-center gap-4 text-amber-900 shadow-sm animate-pulse mb-6">
+          <Bell className="shrink-0" size={24} />
           <p className="font-black text-sm">{settings.globalMessage}</p>
         </div>
       )}
-
-      <div className="bg-slate-900 rounded-[3rem] p-8 text-white shadow-2xl relative overflow-hidden">
-        <div className="flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="text-center md:text-left">
-            <p className="text-emerald-400 font-black uppercase tracking-widest text-[10px] mb-2">Zawodnik</p>
-            <h1 className="text-4xl font-black tracking-tighter">{player.nick}</h1>
-          </div>
-          <div className="bg-white/10 backdrop-blur-xl border border-white/20 p-6 rounded-[2rem] flex items-center gap-5">
-            <Trophy className="text-amber-400" size={44} />
-            <div>
-              <p className="text-[10px] font-black uppercase text-slate-400">Twoje Punkty</p>
-              <p className="text-5xl font-black tracking-tighter">{totalPoints}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {matches.map((match: any) => (
-          <PredictionCard key={match._id.toString()} match={JSON.parse(JSON.stringify(match))} prediction={predictions.find(p => p.matchId.toString() === match._id.toString())} playerId={player._id.toString()} />
-        ))}
-      </div>
+      
+      <PlayerDashboardClient 
+        player={JSON.parse(JSON.stringify(player))} 
+        matches={JSON.parse(JSON.stringify(matches))} 
+        predictions={JSON.parse(JSON.stringify(predictions))} 
+        totalPoints={totalPoints}
+        appUrl={process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}
+      />
     </div>
   );
 }
 """,
 
-    # 6. Aktualizacja regulaminu (+10 pkt za mistrza)
+    # 6. Ostateczna Aktualizacja Regulaminu
     "src/app/rules/page.tsx": r"""import { Shield, Clock, Target, AlertTriangle, Users, Star, Trophy } from 'lucide-react';
 
 export default function RulesPage() {
   return (
-    <div className="max-w-5xl mx-auto space-y-10 px-4">
+    <div className="max-w-6xl mx-auto space-y-12 px-4 pb-20">
       <div className="text-center space-y-3">
         <h1 className="text-4xl md:text-5xl font-black text-slate-900">Zasady Zabawy</h1>
-        <p className="text-slate-500 max-w-2xl mx-auto font-medium tracking-tight">System punktacji by Mar0</p>
+        <p className="text-slate-500 max-w-2xl mx-auto font-bold tracking-widest uppercase text-sm">System punktacji by Mar0</p>
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <div className="bg-gradient-to-br from-amber-50 to-orange-50 p-7 rounded-[2.5rem] shadow-sm border border-amber-200 flex flex-col gap-4 relative overflow-hidden">
-          <div className="w-14 h-14 bg-gradient-to-br from-amber-400 to-orange-500 text-white rounded-2xl flex items-center justify-center shadow-lg shadow-amber-500/30"><Star size={28} fill="white" /></div>
-          <h2 className="text-xl font-black text-slate-900">Złoty Joker (x2)</h2>
-          <p className="text-slate-700 text-sm leading-relaxed font-bold">Zaznacz gwiazdkę przy swoim "pewniaku". Punkty za ten mecz liczą się podwójnie! Masz 1 Jokera na grupę i 1 na fazę pucharową.</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+        
+        {/* Mistrz Turnieju */}
+        <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-8 rounded-[2.5rem] shadow-xl flex flex-col gap-5 text-white">
+          <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center border border-white/20"><Trophy size={32} className="text-amber-400" /></div>
+          <h2 className="text-2xl font-black">Mistrz Świata</h2>
+          <p className="text-slate-300 text-sm leading-relaxed font-bold">W panelu głównym wytypuj, kto zdobędzie puchar. Trafienie Mistrza to potężny bonus <span className="text-emerald-400 text-lg font-black">+10 punktów</span> do rankingu! <strong>Uwaga:</strong> Zapis blokuje się w chwili startu pierwszego meczu na Mundialu.</p>
         </div>
 
-        <div className="bg-white p-7 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col gap-4">
-          <div className="w-14 h-14 bg-slate-900 text-white rounded-2xl flex items-center justify-center shadow-lg"><Trophy size={28} /></div>
-          <h2 className="text-xl font-black text-slate-900">Mistrz Świata</h2>
-          <p className="text-slate-700 text-sm leading-relaxed font-bold">Wskaż swojego faworyta przed turniejem. Trafienie Mistrza to dodatkowe <span className="text-emerald-600 text-lg">+10 punktów</span> do rankingu na koniec zabawy!</p>
+        {/* Złoty Joker */}
+        <div className="bg-gradient-to-br from-amber-400 to-orange-500 p-8 rounded-[2.5rem] shadow-xl flex flex-col gap-5 text-white">
+          <div className="w-16 h-16 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center border border-white/30"><Star size={32} fill="white" /></div>
+          <h2 className="text-2xl font-black">Złoty Joker (x2)</h2>
+          <p className="text-white/90 text-sm leading-relaxed font-bold">Masz do dyspozycji Jokera w fazie grupowej i fazie pucharowej. Kliknij przycisk "Joker" nad meczem, a zdobyte w nim punkty zostaną <strong>pomnożone x2</strong> (np. trafisz idealnie = 6 pkt). Używaj strategicznie!</p>
         </div>
 
-        <div className="bg-white p-7 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col gap-4">
-          <div className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center shadow-sm"><Target size={28} /></div>
-          <h2 className="text-xl font-black text-slate-900">Punktacja</h2>
-          <ul className="text-slate-700 text-xs space-y-3 font-black uppercase">
-            <li className="flex items-center gap-3"><span className="bg-emerald-500 text-white px-2 py-1 rounded w-14 text-center">3 pkt</span> Idealny wynik</li>
-            <li className="flex items-center gap-3"><span className="bg-amber-500 text-white px-2 py-1 rounded w-14 text-center">1 pkt</span> Rezultat (1X2)</li>
-            <li className="flex items-center gap-3"><span className="bg-slate-200 text-slate-500 px-2 py-1 rounded w-14 text-center">0 pkt</span> Pudło</li>
+        {/* Punktacja */}
+        <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border-2 border-slate-100 flex flex-col gap-5 hover:border-blue-200 transition">
+          <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center"><Target size={32} /></div>
+          <h2 className="text-2xl font-black text-slate-900">Punktacja Meczów</h2>
+          <ul className="text-slate-700 text-sm space-y-4 font-black">
+            <li className="flex items-center gap-4"><span className="bg-emerald-500 text-white px-3 py-1.5 rounded-lg w-16 text-center shadow-sm">3 pkt</span> Idealny wynik (np. dałeś 2:1, jest 2:1)</li>
+            <li className="flex items-center gap-4"><span className="bg-amber-500 text-white px-3 py-1.5 rounded-lg w-16 text-center shadow-sm">1 pkt</span> Rezultat/Kierunek (np. dałeś 1:0, było 3:0)</li>
+            <li className="flex items-center gap-4"><span className="bg-slate-200 text-slate-500 px-3 py-1.5 rounded-lg w-16 text-center">0 pkt</span> Pudło</li>
           </ul>
+        </div>
+
+        {/* Deadline */}
+        <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border-2 border-slate-100 flex flex-col gap-5 hover:border-red-200 transition">
+          <div className="w-16 h-16 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center"><Clock size={32} /></div>
+          <h2 className="text-2xl font-black text-slate-900">Deadline: 12 Godzin</h2>
+          <p className="text-slate-600 text-sm leading-relaxed font-bold">Każdy mecz zamyka się do typowania na <strong>12 godzin</strong> przed jego rozpoczęciem. Po tym czasie kłódka się zamyka i Twój typ jest ostateczny. Pilnuj czasu!</p>
+        </div>
+
+        {/* Czas Regulaminowy */}
+        <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border-2 border-slate-100 flex flex-col gap-5 hover:border-purple-200 transition">
+          <div className="w-16 h-16 bg-purple-50 text-purple-600 rounded-2xl flex items-center justify-center"><Shield size={32} /></div>
+          <h2 className="text-2xl font-black text-slate-900">Tylko 90 Minut</h2>
+          <p className="text-slate-600 text-sm leading-relaxed font-bold">Gramy wyłącznie na <strong>wynik po 90 minutach gry</strong> (plus doliczony czas). Ewentualne dogrywki i rzuty karne w fazie pucharowej nie mają dla nas znaczenia!</p>
+        </div>
+
+        {/* Twoje Konto */}
+        <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border-2 border-slate-100 flex flex-col gap-5 hover:border-slate-300 transition">
+          <div className="w-16 h-16 bg-slate-100 text-slate-700 rounded-2xl flex items-center justify-center"><Users size={32} /></div>
+          <h2 className="text-2xl font-black text-slate-900">Twoje Konto</h2>
+          <p className="text-slate-600 text-sm leading-relaxed font-bold">Logujesz się z użyciem prywatnego linku. Zapisz go lub wyślij sobie na WhatsApp. Jeśli go zgubisz, Mar0 wygeneruje Ci nowy, ale stary przestanie działać.</p>
+        </div>
+
+      </div>
+
+      <div className="bg-amber-100/50 rounded-3xl p-8 flex flex-col sm:flex-row items-center sm:items-start gap-6 text-sm text-amber-900 border-2 border-amber-200 shadow-sm mt-12">
+        <AlertTriangle className="text-amber-500 shrink-0 mt-1" size={36} />
+        <div className="text-center sm:text-left">
+          <p className="font-black text-lg mb-2 uppercase tracking-widest text-amber-600">Zasady Remisu w Rankingu:</p>
+          <p className="font-bold leading-relaxed text-amber-800/80">W przypadku równej ilości punktów, wyżej w tabeli będzie osoba z większą liczbą "idealnych trafień" (strzałów za 3 punkty). Jeśli nadal jest remis, decyduje kolejność alfabetyczna nicków.</p>
         </div>
       </div>
     </div>
@@ -403,7 +411,7 @@ def build_project():
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content.strip() + "\n")
-        print(f"✅ AKTUALIZACJA: {filepath}")
+        print(f"✅ AKTUALIZACJA ZAKOŃCZONA: {filepath}")
 
 if __name__ == "__main__":
     build_project()
