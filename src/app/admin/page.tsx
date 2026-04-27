@@ -127,7 +127,6 @@ export default function AdminPage() {
   return (
     <div className="max-w-6xl mx-auto space-y-8 px-4 pb-20 relative">
       
-      {/* MODAL QR CODE */}
       {qrModal.isOpen && (
         <div className="fixed inset-0 bg-slate-900/80 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl relative">
@@ -150,7 +149,6 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* HEADER ZAKŁADEK */}
       <div className="bg-white rounded-3xl p-3 shadow-sm border border-slate-200 flex flex-col lg:flex-row justify-between items-center gap-4">
         <div className="flex items-center gap-2 overflow-x-auto w-full lg:w-auto pb-2 lg:pb-0 scrollbar-hide">
           <button onClick={() => {setActiveTab('DASHBOARD'); setEditingPlayer(null);}} className={`flex items-center whitespace-nowrap gap-2 px-5 py-3 rounded-2xl font-black text-sm transition ${activeTab === 'DASHBOARD' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}>
@@ -173,7 +171,6 @@ export default function AdminPage() {
 
       {message.text && (<div className={`p-4 rounded-2xl font-black border-2 text-center ${message.type === 'error' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>{message.text}</div>)}
 
-      {/* --- ZAKŁADKA 1: DASHBOARD --- */}
       {activeTab === 'DASHBOARD' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
            <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
@@ -181,10 +178,9 @@ export default function AdminPage() {
               <textarea 
                 defaultValue={data.settings?.globalMessage || ''}
                 onBlur={(e) => updateGlobalSettings(secret, { globalMessage: e.target.value })}
-                placeholder="Wpisz ważną wiadomość dla wszystkich graczy (pojawi się na ich pulpitach)..."
+                placeholder="Wpisz ważną wiadomość dla wszystkich graczy..."
                 className="w-full h-32 p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-amber-400 font-bold text-slate-700 resize-none"
               />
-              <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-widest text-right">Zapisuje się automatycznie</p>
            </div>
            
            <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col justify-center gap-4">
@@ -194,7 +190,6 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* --- ZAKŁADKA 2: GRACZE (Dodawanie i Edycja) --- */}
       {activeTab === 'PLAYERS' && (
         <div className="space-y-6">
           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
@@ -217,17 +212,19 @@ export default function AdminPage() {
                      </div>
                      <div className="text-[10px] font-black text-blue-500 uppercase tracking-widest">{p.company}</div>
                    </div>
+                   
                    <div className="flex flex-col gap-2">
-                      <div className="flex gap-2">
-                        {p.rawToken ? (
-                           <button onClick={() => copyLink(p.rawToken, p._id)} className={`flex-1 py-2.5 rounded-xl font-black text-xs transition-all ${copiedId === p._id ? 'bg-emerald-500 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-800'}`}>
+                      {p.rawToken ? (
+                         <div className="flex gap-2 w-full">
+                           <button onClick={() => copyLink(p.rawToken, p._id)} className={`flex-1 py-2.5 rounded-xl font-black text-xs transition-all ${copiedId === p._id ? 'bg-emerald-500 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-800 shadow-sm'}`}>
                              {copiedId === p._id ? 'SKOPIOWANO!' : 'KOPIUJ LINK'}
                            </button>
-                        ) : (
-                           <button onClick={() => handleRegenerateLink(p._id, p.nick)} className="flex-1 py-2.5 bg-amber-100 text-amber-700 rounded-xl font-black text-xs hover:bg-amber-200 transition">ODZYSKAJ LINK</button>
-                        )}
-                        <button onClick={() => { setQrModal({ isOpen: true, link: `${appUrl}/p/${p.rawToken || p.tokenHash}`, nick: p.nick }); }} className="p-2.5 bg-slate-100 rounded-xl hover:bg-slate-200" title="Pokaż QR"><QrCode size={18}/></button>
-                      </div>
+                           <button onClick={() => { setQrModal({ isOpen: true, link: `${appUrl}/p/${p.rawToken}`, nick: p.nick }); }} className="px-4 bg-slate-100 text-slate-700 rounded-xl hover:bg-slate-200 shadow-sm transition" title="Pokaż Kod QR"><QrCode size={18}/></button>
+                         </div>
+                      ) : (
+                         <button onClick={() => handleRegenerateLink(p._id, p.nick)} className="w-full py-2.5 bg-amber-100 text-amber-700 rounded-xl font-black text-xs hover:bg-amber-200 transition flex justify-center items-center gap-2"><RefreshCw size={14}/> WYGENERUJ NOWY LINK (WYMAGANE)</button>
+                      )}
+                      
                       <div className="flex gap-2">
                         <button onClick={() => { setEditingPlayer(p); getPlayerPredictionsForAdmin(secret, p._id).then(r => { setPlayerMatches(r.matches); setPlayerPreds(r.predictions); }); }} className="flex-1 bg-blue-50 text-blue-700 hover:bg-blue-100 py-2.5 rounded-xl font-black text-xs transition">EDYTUJ TYPY</button>
                         <button onClick={() => actionWrapper(() => togglePlayerBlock(secret, p._id, p.blocked)).then(()=>loadData())} className={`p-2.5 rounded-xl transition ${p.blocked ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`} title={p.blocked ? "Odblokuj" : "Zablokuj"}><Ban size={18}/></button>
@@ -268,17 +265,16 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* --- ZAKŁADKA 3: MECZE (Brakująca wcześniej część!) --- */}
       {activeTab === 'MATCHES' && (
         <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100 min-h-[600px]">
           <h2 className="text-2xl font-black text-slate-900 mb-2 flex items-center gap-3"><Edit3 className="text-amber-500" size={28}/> Super-Edytor Meczów</h2>
-          <p className="text-sm text-slate-500 font-bold mb-6">Masz pełną kontrolę nad terminarzem. Zmieniaj daty, drużyny i wymuszaj wyniki z pominięciem API.</p>
+          <p className="text-sm text-slate-500 font-bold mb-6">Pełna kontrola nad terminarzem. Zmieniaj daty, drużyny i wpisuj wyniki z palca (Override).</p>
           
           <div className="relative mb-8">
             <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
             <input 
               type="text" 
-              placeholder="Wyszukaj mecz po nazwie państwa, fazie lub grupie..." 
+              placeholder="Wyszukaj mecz po nazwie państwa..." 
               value={matchSearch} 
               onChange={(e) => setMatchSearch(e.target.value)}
               className="w-full pl-14 pr-5 py-4 bg-slate-50 border-2 border-slate-200 rounded-2xl outline-none focus:border-amber-500 font-bold text-slate-800 transition"
@@ -316,7 +312,6 @@ export default function AdminPage() {
                         <button type="submit" disabled={loading} className="ml-3 text-xs font-black bg-slate-900 text-white px-6 py-3.5 rounded-xl hover:bg-slate-800 transition shadow-md">ZAPISZ</button>
                       </div>
                     </div>
-                    {isOverridden && <div className="text-[10px] text-amber-700 font-black tracking-widest uppercase text-center bg-amber-100 py-1.5 rounded-lg">Wynik nadpisany z palca (Override)</div>}
                   </form>
                 )
               })
@@ -325,7 +320,6 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* --- ZAKŁADKA 4: USTAWIENIA --- */}
       {activeTab === 'SETTINGS' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
            <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
@@ -340,8 +334,8 @@ export default function AdminPage() {
            </div>
 
            <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col">
-              <h2 className="text-2xl font-black text-slate-900 mb-2 flex items-center gap-3">🏆 Rozlicz Mistrza</h2>
-              <p className="text-sm font-bold text-slate-500 mb-6">Wybierz zwycięzcę Mistrzostw (Opcja do użycia na sam koniec Mundialu).</p>
+              <h2 className="text-2xl font-black text-slate-900 mb-2 flex items-center gap-3">🏆 Oficjalny Mistrz</h2>
+              <p className="text-sm font-bold text-slate-500 mb-6">Wybierz zwycięzcę, aby rozliczyć +10 pkt.</p>
               <select 
                 defaultValue={data.settings?.tournamentWinner || ''}
                 onChange={(e) => updateGlobalSettings(secret, { tournamentWinner: e.target.value }).then(()=>loadData())}
@@ -356,7 +350,6 @@ export default function AdminPage() {
                  <option value="England">Anglia</option>
                  <option value="Portugal">Portugalia</option>
                  <option value="Poland">Polska</option>
-                 {/* Użytkownik dopisze sobie resztę państw jeśli to nie był żaden z faworytów :) */}
               </select>
            </div>
         </div>

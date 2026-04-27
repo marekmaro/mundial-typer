@@ -1,168 +1,110 @@
 import os
 
 FILES = {
-    # 1. KOMPLETNE AKCJE SERWEROWE (Wszystkie funkcje przywrócone i scalone)
-    "src/actions/admin.ts": r"""'use server';
-import connectToDatabase from '@/lib/db';
-import Player from '@/models/Player';
+    # 1. Strona Główna (Dodanie listy graczy typujących mecze)
+    "src/app/page.tsx": r"""import connectToDatabase from '@/lib/db';
 import Match from '@/models/Match';
 import Prediction from '@/models/Prediction';
-import Settings from '@/models/Settings';
-import { calculatePoints } from '@/lib/scoring';
-import crypto from 'crypto';
-import { revalidatePath } from 'next/cache';
-import { syncMatchesFromAPI } from '@/lib/syncMundial';
+import Player from '@/models/Player';
+import Link from 'next/link';
+import TeamFlag from '@/components/TeamFlag';
+import { t, shortT } from '@/lib/translations';
+import { format } from 'date-fns';
+import { pl } from 'date-fns/locale';
+import { CalendarDays, Trophy, Users } from 'lucide-react';
 
-export async function getSettings() {
+export const revalidate = 60;
+
+export default async function HomePage() {
   await connectToDatabase();
-  let s = await Settings.findOne();
-  if (!s) s = await Settings.create({ maintenanceMode: false, globalMessage: "", tournamentWinner: "" });
-  return s;
-}
+  const upcomingMatches = await Match.find({ status: 'SCHEDULED' }).sort({ kickoffUtc: 1 }).limit(4).lean();
 
-export async function createPlayerLink(nick: string, company: string, adminSecret: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Nieprawidłowe hasło.' };
-  await connectToDatabase();
-  try {
-    const rawToken = crypto.randomBytes(16).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-    await Player.create({ nick: nick.trim(), company: company.trim() || 'Ogólna', tokenHash, rawToken });
-    revalidatePath('/admin'); revalidatePath('/leaderboard');
-    return { success: true, token: rawToken };
-  } catch (error) { return { error: 'Błąd tworzenia gracza.' }; }
-}
+  const matchIds = upcomingMatches.map(m => m._id);
+  const predictions = await Prediction.find({ matchId: { $in: matchIds } }).lean();
+  const playerIds = [...new Set(predictions.map(p => p.playerId.toString()))];
+  const players = await Player.find({ _id: { $in: playerIds } }).lean();
 
-export async function regeneratePlayerLink(adminSecret: string, playerId: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Nieprawidłowe hasło.' };
-  await connectToDatabase();
-  try {
-    const rawToken = crypto.randomBytes(16).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-    await Player.findByIdAndUpdate(playerId, { tokenHash, rawToken });
-    revalidatePath('/admin');
-    return { success: true, token: rawToken };
-  } catch (error) { return { error: 'Błąd podczas odnawiania linku.' }; }
-}
-
-export async function updateGlobalSettings(adminSecret: string, data: any) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
-  await connectToDatabase();
-  await Settings.findOneAndUpdate({}, data, { upsert: true });
-  revalidatePath('/admin'); revalidatePath('/p/[token]', 'page');
-  return { success: true, message: "Ustawienia zapisane!" };
-}
-
-export async function recalculateAllPoints(adminSecret: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła.' };
-  await connectToDatabase();
-  const matches = await Match.find({ status: 'FINISHED' });
-  for (const match of matches) {
-    const homeScore = match.scoreOverride?.home ?? match.score.home;
-    const awayScore = match.scoreOverride?.away ?? match.score.away;
-    if (homeScore === null || awayScore === null) continue;
-    const predictions = await Prediction.find({ matchId: match._id });
-    for (const pred of predictions) {
-      const pts = calculatePoints(pred.home, pred.away, homeScore, awayScore, pred.isJoker);
-      if (pred.points !== pts) { pred.points = pts; await pred.save(); }
-    }
-  }
-  revalidatePath('/admin'); revalidatePath('/leaderboard'); revalidatePath('/p/[token]', 'page');
-  return { success: true, message: `Przeliczono punkty dla wszystkich graczy.` };
-}
-
-export async function syncMatchesAction(adminSecret: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła.' };
-  const result = await syncMatchesFromAPI();
-  revalidatePath('/'); revalidatePath('/schedule'); revalidatePath('/admin'); revalidatePath('/bracket');
-  return { success: true, message: `Zsynchronizowano! Dodano: ${result.added}, Info: ${result.updated}` };
-}
-
-export async function getAdminData(adminSecret: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak dostępu' };
-  await connectToDatabase();
-  const players = await Player.find().sort({ createdAt: -1 }).lean();
-  const settings = await getSettings();
-  const matches = await Match.find().sort({ kickoffUtc: 1 }).lean();
-  return { success: true, players: JSON.parse(JSON.stringify(players)), settings: JSON.parse(JSON.stringify(settings)), matches: JSON.parse(JSON.stringify(matches)) };
-}
-
-export async function togglePlayerBlock(adminSecret: string, playerId: string, currentStatus: boolean) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
-  await connectToDatabase();
-  await Player.findByIdAndUpdate(playerId, { blocked: !currentStatus });
-  revalidatePath('/admin'); revalidatePath('/leaderboard');
-  return { success: true };
-}
-
-export async function deletePlayerAction(adminSecret: string, playerId: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
-  await connectToDatabase();
-  await Prediction.deleteMany({ playerId });
-  await Player.findByIdAndDelete(playerId);
-  revalidatePath('/admin'); revalidatePath('/leaderboard');
-  return { success: true };
-}
-
-export async function getPlayerPredictionsForAdmin(adminSecret: string, playerId: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
-  await connectToDatabase();
-  const matches = await Match.find().sort({ kickoffUtc: 1 }).lean();
-  const predictions = await Prediction.find({ playerId }).lean();
-  return { success: true, matches: JSON.parse(JSON.stringify(matches)), predictions: JSON.parse(JSON.stringify(predictions)) };
-}
-
-export async function adminOverridePrediction(adminSecret: string, playerId: string, matchId: string, home: number, away: number) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
-  await connectToDatabase();
-  await Prediction.findOneAndUpdate({ playerId, matchId }, { home, away }, { upsert: true });
-  return { success: true };
-}
-
-export async function exportLeaderboardCSV(adminSecret: string) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
-  await connectToDatabase();
-  const players = await Player.find({ blocked: false }).lean();
-  const predictions = await Prediction.find({ points: { $ne: null } }).lean();
-  const stats = players.map(player => {
-    const pPreds = predictions.filter(p => p.playerId.toString() === player._id.toString());
-    const totalPoints = pPreds.reduce((sum, p) => sum + (p.points || 0), 0);
-    const exactHits = pPreds.filter(p => p.points === 3).length;
-    return { nick: player.nick, company: player.company, totalPoints, exactHits };
+  const matchesWithPredictors = upcomingMatches.map(m => {
+     const predsForMatch = predictions.filter(p => p.matchId.toString() === m._id.toString());
+     const predictorNicks = predsForMatch.map(p => {
+         const player = players.find(pl => pl._id.toString() === p.playerId.toString());
+         return player ? player.nick : 'Nieznany';
+     });
+     return { ...m, predictors: predictorNicks };
   });
-  stats.sort((a, b) => b.totalPoints - a.totalPoints || b.exactHits - a.exactHits || a.nick.localeCompare(b.nick));
-  let csv = 'Pozycja,Nick,Firma,Punkty,DokladneTrafienia\n';
-  stats.forEach((s, i) => { csv += `${i + 1},${s.nick},${s.company || 'Ogólna'},${s.totalPoints},${s.exactHits}\n`; });
-  return { success: true, csv };
-}
 
-export async function superEditMatchAction(adminSecret: string, matchId: string, payload: any) {
-  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Odmowa dostępu' };
-  await connectToDatabase();
-  try {
-    const updateData: any = {
-      homeTeam: payload.homeTeam,
-      awayTeam: payload.awayTeam,
-      status: payload.status,
-      kickoffUtc: new Date(payload.kickoffUtc)
-    };
-    if (payload.homeScore !== '' && payload.awayScore !== '') {
-      updateData.scoreOverride = {
-        home: parseInt(payload.homeScore),
-        away: parseInt(payload.awayScore),
-        updatedAt: new Date()
-      };
-      if (payload.status !== 'SCHEDULED') updateData.status = 'FINISHED';
-    } else {
-      updateData.scoreOverride = null;
-    }
-    await Match.findByIdAndUpdate(matchId, updateData);
-    revalidatePath('/admin'); revalidatePath('/schedule'); revalidatePath('/bracket'); revalidatePath('/p/[token]', 'page');
-    return { success: true, message: `Zapisano zmiany w meczu!` };
-  } catch (error) { return { error: 'Błąd podczas aktualizacji meczu.' }; }
+  return (
+    <div className="space-y-12 max-w-5xl mx-auto px-4 pb-20">
+      <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-[3rem] p-8 md:p-16 text-white shadow-2xl flex flex-col items-center text-center gap-8 border border-slate-700 relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-8 opacity-10"><Trophy size={200} /></div>
+        <div className="space-y-6 max-w-3xl relative z-10">
+          <h1 className="text-4xl md:text-6xl font-black tracking-tighter text-white leading-tight">
+            Kto zdobędzie <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-300">Puchar?</span>
+          </h1>
+          <p className="text-slate-300 text-lg md:text-xl font-bold">
+            Odbierz prywatny link, typuj wyniki (pamiętaj o Złotym Jokerze!) i udowodnij znajomym, że znasz się na piłce najlepiej.
+          </p>
+          <div className="pt-6 flex flex-col sm:flex-row gap-4 justify-center items-center">
+            <Link href="/leaderboard" className="bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-black py-4 px-10 rounded-2xl flex items-center gap-2 text-lg transition-transform hover:scale-105 shadow-xl shadow-emerald-500/20">
+              <Trophy size={20} /> Zobacz Ranking
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3 border-b-2 border-slate-100 pb-4">
+          <CalendarDays className="text-emerald-500" size={28} /> Najbliższe Spotkania
+        </h2>
+        
+        {matchesWithPredictors.length === 0 ? (
+          <div className="bg-white p-10 rounded-3xl border-2 border-slate-100 text-center text-slate-500 font-bold shadow-sm">Brak zaplanowanych spotkań w API.</div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {matchesWithPredictors.map((match: any) => {
+              const dateStr = format(new Date(match.kickoffUtc), "d MMMM (EEEE), HH:mm", { locale: pl });
+              return (
+                <div key={match._id.toString()} className="bg-white border-2 border-slate-100 rounded-[2rem] p-6 shadow-sm hover:border-emerald-200 transition group flex flex-col">
+                  <div className="flex justify-between items-center mb-6">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-50 px-3 py-1 rounded-md">{match.stage} {match.group && `• ${match.group}`}</span>
+                    <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest bg-emerald-50 px-3 py-1 rounded-md">{dateStr}</span>
+                  </div>
+                  
+                  <div className="flex justify-between items-center font-black text-xl text-slate-800 mb-6">
+                    <Link href={`/team/${encodeURIComponent(match.homeTeam)}`} className="flex-1 flex flex-col items-center gap-3 hover:text-emerald-600 transition">
+                      <TeamFlag teamName={match.homeTeam} className="w-14 h-10 rounded-lg shadow-sm" />
+                      <span className="truncate text-base" title={t(match.homeTeam)}>{shortT(match.homeTeam)}</span>
+                    </Link>
+                    <div className="px-5 py-2 bg-slate-50 border-2 border-slate-100 rounded-2xl text-slate-400 text-sm">VS</div>
+                    <Link href={`/team/${encodeURIComponent(match.awayTeam)}`} className="flex-1 flex flex-col items-center gap-3 hover:text-emerald-600 transition">
+                      <TeamFlag teamName={match.awayTeam} className="w-14 h-10 rounded-lg shadow-sm" />
+                      <span className="truncate text-base" title={t(match.awayTeam)}>{shortT(match.awayTeam)}</span>
+                    </Link>
+                  </div>
+
+                  <div className="mt-auto pt-4 border-t-2 border-slate-50 flex items-center gap-3 text-xs font-bold text-slate-500">
+                     <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center text-blue-500 shrink-0"><Users size={16}/></div>
+                     {match.predictors.length === 0 ? (
+                       <span>Jeszcze nikt nie wytypował. Bądź pierwszy!</span>
+                     ) : (
+                       <span className="truncate" title={match.predictors.join(', ')}>
+                         Typy oddali: <span className="text-slate-800">{match.predictors.slice(0, 3).join(', ')}</span>
+                         {match.predictors.length > 3 && ` i ${match.predictors.length - 3} innych`}
+                       </span>
+                     )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 """,
 
-    # 2. KOMPLETNY WIDOK PANELU ADMINA (4 Zakładki w tym MECZE, wszystkie importy)
+    # 2. Panel Admina (Wymuszenie wygenerowania linku dla starych kont przed pokazaniem QR)
     "src/app/admin/page.tsx": r"""'use client';
 import { useState, useEffect } from 'react';
 import { createPlayerLink, recalculateAllPoints, syncMatchesAction, getAdminData, deletePlayerAction, togglePlayerBlock, getPlayerPredictionsForAdmin, adminOverridePrediction, exportLeaderboardCSV, superEditMatchAction, regeneratePlayerLink, updateGlobalSettings } from '@/actions/admin';
@@ -292,7 +234,6 @@ export default function AdminPage() {
   return (
     <div className="max-w-6xl mx-auto space-y-8 px-4 pb-20 relative">
       
-      {/* MODAL QR CODE */}
       {qrModal.isOpen && (
         <div className="fixed inset-0 bg-slate-900/80 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl relative">
@@ -315,7 +256,6 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* HEADER ZAKŁADEK */}
       <div className="bg-white rounded-3xl p-3 shadow-sm border border-slate-200 flex flex-col lg:flex-row justify-between items-center gap-4">
         <div className="flex items-center gap-2 overflow-x-auto w-full lg:w-auto pb-2 lg:pb-0 scrollbar-hide">
           <button onClick={() => {setActiveTab('DASHBOARD'); setEditingPlayer(null);}} className={`flex items-center whitespace-nowrap gap-2 px-5 py-3 rounded-2xl font-black text-sm transition ${activeTab === 'DASHBOARD' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}>
@@ -338,7 +278,6 @@ export default function AdminPage() {
 
       {message.text && (<div className={`p-4 rounded-2xl font-black border-2 text-center ${message.type === 'error' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>{message.text}</div>)}
 
-      {/* --- ZAKŁADKA 1: DASHBOARD --- */}
       {activeTab === 'DASHBOARD' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
            <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
@@ -346,10 +285,9 @@ export default function AdminPage() {
               <textarea 
                 defaultValue={data.settings?.globalMessage || ''}
                 onBlur={(e) => updateGlobalSettings(secret, { globalMessage: e.target.value })}
-                placeholder="Wpisz ważną wiadomość dla wszystkich graczy (pojawi się na ich pulpitach)..."
+                placeholder="Wpisz ważną wiadomość dla wszystkich graczy..."
                 className="w-full h-32 p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-amber-400 font-bold text-slate-700 resize-none"
               />
-              <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-widest text-right">Zapisuje się automatycznie</p>
            </div>
            
            <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col justify-center gap-4">
@@ -359,7 +297,6 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* --- ZAKŁADKA 2: GRACZE (Dodawanie i Edycja) --- */}
       {activeTab === 'PLAYERS' && (
         <div className="space-y-6">
           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
@@ -382,17 +319,19 @@ export default function AdminPage() {
                      </div>
                      <div className="text-[10px] font-black text-blue-500 uppercase tracking-widest">{p.company}</div>
                    </div>
+                   
                    <div className="flex flex-col gap-2">
-                      <div className="flex gap-2">
-                        {p.rawToken ? (
-                           <button onClick={() => copyLink(p.rawToken, p._id)} className={`flex-1 py-2.5 rounded-xl font-black text-xs transition-all ${copiedId === p._id ? 'bg-emerald-500 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-800'}`}>
+                      {p.rawToken ? (
+                         <div className="flex gap-2 w-full">
+                           <button onClick={() => copyLink(p.rawToken, p._id)} className={`flex-1 py-2.5 rounded-xl font-black text-xs transition-all ${copiedId === p._id ? 'bg-emerald-500 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-800 shadow-sm'}`}>
                              {copiedId === p._id ? 'SKOPIOWANO!' : 'KOPIUJ LINK'}
                            </button>
-                        ) : (
-                           <button onClick={() => handleRegenerateLink(p._id, p.nick)} className="flex-1 py-2.5 bg-amber-100 text-amber-700 rounded-xl font-black text-xs hover:bg-amber-200 transition">ODZYSKAJ LINK</button>
-                        )}
-                        <button onClick={() => { setQrModal({ isOpen: true, link: `${appUrl}/p/${p.rawToken || p.tokenHash}`, nick: p.nick }); }} className="p-2.5 bg-slate-100 rounded-xl hover:bg-slate-200" title="Pokaż QR"><QrCode size={18}/></button>
-                      </div>
+                           <button onClick={() => { setQrModal({ isOpen: true, link: `${appUrl}/p/${p.rawToken}`, nick: p.nick }); }} className="px-4 bg-slate-100 text-slate-700 rounded-xl hover:bg-slate-200 shadow-sm transition" title="Pokaż Kod QR"><QrCode size={18}/></button>
+                         </div>
+                      ) : (
+                         <button onClick={() => handleRegenerateLink(p._id, p.nick)} className="w-full py-2.5 bg-amber-100 text-amber-700 rounded-xl font-black text-xs hover:bg-amber-200 transition flex justify-center items-center gap-2"><RefreshCw size={14}/> WYGENERUJ NOWY LINK (WYMAGANE)</button>
+                      )}
+                      
                       <div className="flex gap-2">
                         <button onClick={() => { setEditingPlayer(p); getPlayerPredictionsForAdmin(secret, p._id).then(r => { setPlayerMatches(r.matches); setPlayerPreds(r.predictions); }); }} className="flex-1 bg-blue-50 text-blue-700 hover:bg-blue-100 py-2.5 rounded-xl font-black text-xs transition">EDYTUJ TYPY</button>
                         <button onClick={() => actionWrapper(() => togglePlayerBlock(secret, p._id, p.blocked)).then(()=>loadData())} className={`p-2.5 rounded-xl transition ${p.blocked ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`} title={p.blocked ? "Odblokuj" : "Zablokuj"}><Ban size={18}/></button>
@@ -433,17 +372,16 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* --- ZAKŁADKA 3: MECZE (Brakująca wcześniej część!) --- */}
       {activeTab === 'MATCHES' && (
         <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-slate-100 min-h-[600px]">
           <h2 className="text-2xl font-black text-slate-900 mb-2 flex items-center gap-3"><Edit3 className="text-amber-500" size={28}/> Super-Edytor Meczów</h2>
-          <p className="text-sm text-slate-500 font-bold mb-6">Masz pełną kontrolę nad terminarzem. Zmieniaj daty, drużyny i wymuszaj wyniki z pominięciem API.</p>
+          <p className="text-sm text-slate-500 font-bold mb-6">Pełna kontrola nad terminarzem. Zmieniaj daty, drużyny i wpisuj wyniki z palca (Override).</p>
           
           <div className="relative mb-8">
             <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
             <input 
               type="text" 
-              placeholder="Wyszukaj mecz po nazwie państwa, fazie lub grupie..." 
+              placeholder="Wyszukaj mecz po nazwie państwa..." 
               value={matchSearch} 
               onChange={(e) => setMatchSearch(e.target.value)}
               className="w-full pl-14 pr-5 py-4 bg-slate-50 border-2 border-slate-200 rounded-2xl outline-none focus:border-amber-500 font-bold text-slate-800 transition"
@@ -481,7 +419,6 @@ export default function AdminPage() {
                         <button type="submit" disabled={loading} className="ml-3 text-xs font-black bg-slate-900 text-white px-6 py-3.5 rounded-xl hover:bg-slate-800 transition shadow-md">ZAPISZ</button>
                       </div>
                     </div>
-                    {isOverridden && <div className="text-[10px] text-amber-700 font-black tracking-widest uppercase text-center bg-amber-100 py-1.5 rounded-lg">Wynik nadpisany z palca (Override)</div>}
                   </form>
                 )
               })
@@ -490,7 +427,6 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* --- ZAKŁADKA 4: USTAWIENIA --- */}
       {activeTab === 'SETTINGS' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
            <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
@@ -505,8 +441,8 @@ export default function AdminPage() {
            </div>
 
            <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col">
-              <h2 className="text-2xl font-black text-slate-900 mb-2 flex items-center gap-3">🏆 Rozlicz Mistrza</h2>
-              <p className="text-sm font-bold text-slate-500 mb-6">Wybierz zwycięzcę Mistrzostw (Opcja do użycia na sam koniec Mundialu).</p>
+              <h2 className="text-2xl font-black text-slate-900 mb-2 flex items-center gap-3">🏆 Oficjalny Mistrz</h2>
+              <p className="text-sm font-bold text-slate-500 mb-6">Wybierz zwycięzcę, aby rozliczyć +10 pkt.</p>
               <select 
                 defaultValue={data.settings?.tournamentWinner || ''}
                 onChange={(e) => updateGlobalSettings(secret, { tournamentWinner: e.target.value }).then(()=>loadData())}
@@ -521,7 +457,6 @@ export default function AdminPage() {
                  <option value="England">Anglia</option>
                  <option value="Portugal">Portugalia</option>
                  <option value="Poland">Polska</option>
-                 {/* Użytkownik dopisze sobie resztę państw jeśli to nie był żaden z faworytów :) */}
               </select>
            </div>
         </div>
@@ -537,7 +472,7 @@ def build_project():
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content.strip() + "\n")
-        print(f"✅ OSTATECZNA NAPRAWA: Zaktualizowano i ujednolicono {filepath}")
+        print(f"✅ Zaktualizowano i naprawiono: {filepath}")
 
 if __name__ == "__main__":
     build_project()
