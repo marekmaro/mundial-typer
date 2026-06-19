@@ -6,7 +6,7 @@ import { pl } from 'date-fns/locale';
 import { t } from '@/lib/translations';
 import Link from 'next/link';
 
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
 
 export default async function SchedulePage() {
   await connectToDatabase();
