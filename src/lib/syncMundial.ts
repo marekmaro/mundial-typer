@@ -34,7 +34,7 @@ function parseApiDateToUTC(dateStr: string, timeStr: string): Date {
 
 export async function syncMatchesFromAPI() {
   await connectToDatabase();
-  const response = await fetch(API_URL);
+  const response = await fetch(API_URL, { cache: 'no-store' });
   if (!response.ok) throw new Error('Nie udało się pobrać danych z API');
   const data = await response.json();
   
