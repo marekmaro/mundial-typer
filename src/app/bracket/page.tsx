@@ -4,7 +4,7 @@ import TeamFlag from '@/components/TeamFlag';
 import Link from 'next/link';
 import { t } from '@/lib/translations';
 
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
 
 function calculateGroupStandings(groupMatches: any[]) {
   const teams: Record<string, { played: number, won: number, drawn: number, lost: number, gf: number, ga: number, points: number }> = {};
