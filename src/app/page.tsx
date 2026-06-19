@@ -9,7 +9,7 @@ import { format } from 'date-fns';
 import { pl } from 'date-fns/locale';
 import { CalendarDays, Trophy, Users } from 'lucide-react';
 
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
 
 export default async function HomePage() {
   await connectToDatabase();
