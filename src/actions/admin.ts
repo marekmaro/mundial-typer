@@ -155,4 +155,18 @@ export async function superEditMatchAction(adminSecret: string, matchId: string,
     revalidatePath('/admin'); revalidatePath('/schedule'); revalidatePath('/bracket'); revalidatePath('/p/[token]', 'page');
     return { success: true, message: `Zapisano zmiany w meczu!` };
   } catch (error) { return { error: 'Błąd podczas aktualizacji meczu.' }; }
+
+  export async function adminOverridePlayerChampion(adminSecret: string, playerId: string, champion: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła' };
+  await connectToDatabase();
+  await Player.findByIdAndUpdate(playerId, { champion });
+  
+  // Przebudowanie ścieżek
+  import('next/cache').then(({ revalidatePath }) => {
+    revalidatePath('/admin');
+    revalidatePath('/p/[token]', 'page');
+  });
+
+  return { success: true, message: 'Zapisano mistrza wybranego gracza!' };
+}
 }
