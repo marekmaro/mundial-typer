@@ -126,10 +126,10 @@ export default function AdminPage() {
   ) || [];
 
   // Wyciągamy z bazy (z meczów) wszystkie unikalne reprezentacje
-  const uniqueTeams = Array.from(new Set(
-    data.matches?.flatMap((m: any) => [m.homeTeam, m.awayTeam])
-  )).filter((team: any) => team && !team.toLowerCase().includes('winner'))
-    .sort((a: any, b: any) => t(a).localeCompare(t(b)));
+  const rawTeams: string[] = data.matches?.flatMap((m: any) => [m.homeTeam, m.awayTeam]) || [];
+  const uniqueTeams: string[] = Array.from(new Set(rawTeams))
+    .filter((team) => team && !team.toLowerCase().includes('winner'))
+    .sort((a, b) => t(a).localeCompare(t(b)));
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 px-4 pb-20 relative">
@@ -263,7 +263,7 @@ export default function AdminPage() {
                   className="w-full p-4 bg-white border border-blue-200 rounded-xl outline-none font-bold text-slate-800 focus:border-blue-500 cursor-pointer"
                 >
                   <option value="">-- Gracz nie wybrał mistrza --</option>
-                  {uniqueTeams.map((team: string) => (
+                  {uniqueTeams.map((team) => (
                     <option key={team} value={team}>{t(team)}</option>
                   ))}
                 </select>
@@ -379,7 +379,7 @@ export default function AdminPage() {
               className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none font-black text-slate-900 cursor-pointer mt-auto"
             >
               <option value="">-- Wybierz Mistrza z listy --</option>
-              {uniqueTeams.map((team: string) => (
+              {uniqueTeams.map((team) => (
                 <option key={team} value={team}>{t(team)}</option>
               ))}
             </select>
