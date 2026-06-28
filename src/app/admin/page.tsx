@@ -182,12 +182,17 @@ export default function AdminPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
             <h2 className="text-2xl font-black text-slate-900 mb-6 flex items-center gap-3"><Bell className="text-amber-500" /> Tablica Ogłoszeń</h2>
-            <textarea
-              defaultValue={data.settings?.globalMessage || ''}
-              onBlur={(e) => updateGlobalSettings(secret, { globalMessage: e.target.value })}
-              placeholder="Wpisz ważną wiadomość dla wszystkich graczy..."
-              className="w-full h-32 p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-amber-400 font-bold text-slate-700 resize-none"
-            />
+            <form 
+  className="flex flex-col gap-2"
+  onSubmit={(e) => {
+    e.preventDefault();
+    const val = (e.target as any).msg.value;
+    actionWrapper(() => updateGlobalSettings(secret, { globalMessage: val }));
+  }}
+>
+  <textarea name="msg" defaultValue={data.settings?.globalMessage || ''} className="w-full h-32 p-4 border" />
+  <button type="submit" className="bg-blue-600 text-white p-2 rounded">ZATWIERDŹ KOMUNIKAT</button>
+</form>
           </div>
 
           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col justify-center gap-4">
