@@ -41,7 +41,11 @@ export async function syncMatchesFromAPI() {
   let added = 0, updated = 0;
 
   for (const [index, matchData] of data.matches.entries()) {
-    const providerId = `wc26_${index}_${matchData.date}_${matchData.team1.replace(/\s/g, '')}`;
+    // NAPRAWIONE: Unikalne ID niezależne od nazw drużyn. 
+    // Opiera się na dacie, godzinie i pozycji (indeksie) na liście.
+    const timeStr = matchData.time ? matchData.time.replace(/\s/g, '') : '00:00';
+    const providerId = `wc26_idx${index}_${matchData.date}_${timeStr}`;
+
     const kickoff = parseApiDateToUTC(matchData.date, matchData.time);
     const translatedStage = translateStage(matchData.round);
     const groupTranslated = matchData.group ? matchData.group.replace('Group', 'Grupa') : null;
