@@ -167,3 +167,69 @@ export async function adminOverridePlayerChampion(adminSecret: string, playerId:
 
   return { success: true, message: 'Zapisano mistrza wybranego gracza!' };
 }
+
+export async function fixDatabaseDuplicates(adminSecret: string) {
+  if (adminSecret !== process.env.ADMIN_SECRET) return { error: 'Brak hasła.' };
+  await connectToDatabase();
+
+  const matches = await Match.find();
+  const groups = new Map<string, any[]>();
+
+  // 1. Grupowanie meczów - szukamy duplikatów na podstawie numeru indeksu z API
+  for (const m of matches) {
+    const matchStr = m.providerMatchId.match(/wc26_(?:idx|match_)?(\d+)_/);
+    if (matchStr && matchStr[1]) {
+      const idx = matchStr[1];
+      if (!groups.has(idx)) groups.set(idx, []);
+      groups.get(idx)!.push(m);
+    } else {
+      // Fallback - jeśli mecz wpisano z palca, parujemy po czasie rozpoczęcia
+      const fallbackKey = `${m.stage}_${m.kickoffUtc.getTime()}`;
+      if (!groups.has(fallbackKey)) groups.set(fallbackKey, []);
+      groups.get(fallbackKey)!.push(m);
+    }
+  }
+
+  let removedMatches = 0;
+  let movedPredictions = 0;
+
+  // 2. Naprawianie i przenoszenie typów
+  for (const [key, groupMatches] of groups.entries()) {
+    if (groupMatches.length > 1) {
+      // Sortujemy po dacie dodania do bazy. Najnowszy (ten z nowymi drużynami) zostaje.
+      groupMatches.sort((a, b) => b._id.getTimestamp() - a._id.getTimestamp());
+      const keeper = groupMatches[0];
+      const toRemove = groupMatches.slice(1);
+
+      for (const oldMatch of toRemove) {
+        // Znajdujemy wszystkie typy graczy, które wiszą na uszkodzonym duplikacie
+        const oldPreds = await Prediction.find({ matchId: oldMatch._id });
+
+        for (const op of oldPreds) {
+          // Sprawdzamy, czy gracz nie ma już przypisanego typu w nowym meczu
+          const existing = await Prediction.findOne({ matchId: keeper._id, playerId: op.playerId });
+          if (!existing) {
+            // Przypinamy stare typy gracza do nowego, poprawnego meczu
+            op.matchId = keeper._id;
+            await op.save();
+            movedPredictions++;
+          } else {
+            // Czyścimy śmieci, jeśli gracz zdublował typ
+            await Prediction.findByIdAndDelete(op._id);
+          }
+        }
+        // Całkowicie usuwamy zduplikowany mecz
+        await Match.findByIdAndDelete(oldMatch._id);
+        removedMatches++;
+      }
+    }
+  }
+
+  // 3. Wymuszamy ostateczne przeliczenie wszystkich punktów dla zrekonstruowanej bazy
+  await recalculateAllPoints(adminSecret);
+
+  return { 
+    success: true, 
+    message: `Baza naprawiona! Usunięto ${removedMatches} starych duplikatów i uratowano ${movedPredictions} typów graczy. Punkty zostały zaktualizowane.` 
+  };
+}
