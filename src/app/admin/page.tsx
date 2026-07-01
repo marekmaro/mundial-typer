@@ -184,27 +184,35 @@ export default function AdminPage() {
           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
             <h2 className="text-2xl font-black text-slate-900 mb-6 flex items-center gap-3"><Bell className="text-amber-500" /> Tablica Ogłoszeń</h2>
             <form 
-  className="flex flex-col gap-2"
-  onSubmit={(e) => {
-    e.preventDefault();
-    const val = (e.target as any).msg.value;
-    actionWrapper(() => updateGlobalSettings(secret, { globalMessage: val }));
-  }}
->
-  <textarea name="msg" defaultValue={data.settings?.globalMessage || ''} className="w-full h-32 p-4 border" />
-  <button type="submit" className="bg-blue-600 text-white p-2 rounded">ZATWIERDŹ KOMUNIKAT</button>
-</form>
+              className="flex flex-col gap-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const val = (e.target as any).msg.value;
+                actionWrapper(() => updateGlobalSettings(secret, { globalMessage: val }));
+              }}
+            >
+              <textarea
+                name="msg"
+                defaultValue={data.settings?.globalMessage || ''}
+                placeholder="Wpisz ważną wiadomość dla wszystkich graczy..."
+                className="w-full h-32 p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-amber-400 font-bold text-slate-700 resize-none"
+              />
+              <button type="submit" disabled={loading} className="w-full bg-amber-500 hover:bg-amber-600 text-white font-black py-4 rounded-xl transition">
+                ZATWIERDŹ KOMUNIKAT
+              </button>
+            </form>
           </div>
 
           <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col justify-center gap-4">
-  <button onClick={() => actionWrapper(() => recalculateAllPoints(secret)).then(() => loadData())} disabled={loading} className="w-full py-6 bg-emerald-500 text-white rounded-3xl font-black text-xl shadow-lg shadow-emerald-500/20 hover:scale-[1.02] transition-transform flex items-center justify-center gap-3"><Calculator size={24} /> PRZELICZ RANKING</button>
-  <button onClick={() => actionWrapper(() => syncMatchesAction(secret)).then(() => loadData())} disabled={loading} className="w-full py-5 bg-slate-100 text-slate-600 rounded-3xl font-black hover:bg-slate-200 transition-colors flex items-center justify-center gap-3"><RefreshCw size={20} /> SYNCHRONIZUJ API</button>
-  
-  {/* DODANY PRZYCISK RATUNKOWY */}
-  <button onClick={() => { if(confirm('Uruchomić skrypt naprawczy? Spowoduje to usunięcie duplikatów i przeniesienie typów.')) actionWrapper(() => fixDatabaseDuplicates(secret)).then(() => loadData()) }} disabled={loading} className="w-full py-5 bg-red-50 text-red-600 border-2 border-red-200 rounded-3xl font-black hover:bg-red-100 transition-colors flex items-center justify-center gap-3 mt-4">
-    NAPRAW DUPLIKATY I PRZYWRÓĆ TYPY
-  </button>
-</div>
+            <button onClick={() => actionWrapper(() => recalculateAllPoints(secret)).then(() => loadData())} disabled={loading} className="w-full py-6 bg-emerald-500 text-white rounded-3xl font-black text-xl shadow-lg shadow-emerald-500/20 hover:scale-[1.02] transition-transform flex items-center justify-center gap-3"><Calculator size={24} /> PRZELICZ RANKING</button>
+            <button onClick={() => actionWrapper(() => syncMatchesAction(secret)).then(() => loadData())} disabled={loading} className="w-full py-5 bg-slate-100 text-slate-600 rounded-3xl font-black hover:bg-slate-200 transition-colors flex items-center justify-center gap-3"><RefreshCw size={20} /> SYNCHRONIZUJ API</button>
+            
+            {/* Przycisk ratunkowy na duplikaty */}
+            <button onClick={() => { if(confirm('Uruchomić skrypt naprawczy? Spowoduje to usunięcie duplikatów i przeniesienie typów.')) actionWrapper(() => fixDatabaseDuplicates(secret)).then(() => loadData()) }} disabled={loading} className="w-full py-5 bg-red-50 text-red-600 border-2 border-red-200 rounded-3xl font-black hover:bg-red-100 transition-colors flex items-center justify-center gap-3 mt-4">
+              NAPRAW DUPLIKATY I PRZYWRÓĆ TYPY
+            </button>
+          </div>
+        </div>
       )}
 
       {activeTab === 'PLAYERS' && (
