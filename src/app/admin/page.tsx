@@ -1,9 +1,10 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { createPlayerLink, recalculateAllPoints, syncMatchesAction, getAdminData, deletePlayerAction, togglePlayerBlock, getPlayerPredictionsForAdmin, adminOverridePrediction, exportLeaderboardCSV, superEditMatchAction, regeneratePlayerLink, updateGlobalSettings, adminOverridePlayerChampion } from '@/actions/admin';
+import { createPlayerLink, recalculateAllPoints, syncMatchesAction, getAdminData, deletePlayerAction, togglePlayerBlock, getPlayerPredictionsForAdmin, adminOverridePrediction, exportLeaderboardCSV, superEditMatchAction, regeneratePlayerLink, updateGlobalSettings, adminOverridePlayerChampion, fixDatabaseDuplicates } from '@/actions/admin';
 import { QRCodeSVG } from 'qrcode.react';
 import { Shield, UserPlus, RefreshCw, Calculator, Copy, Check, LogIn, Users, Ban, Edit3, Trash2, ChevronLeft, Download, Search, QrCode, X, LayoutDashboard, CalendarDays, Settings, Bell, Lock } from 'lucide-react';
 import { t } from '@/lib/translations';
+
 
 export default function AdminPage() {
   const [secret, setSecret] = useState('');
